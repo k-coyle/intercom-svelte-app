@@ -1,38 +1,55 @@
-# sv
+# intercom-svelte-app
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A SvelteKit-based internal reporting app for analyzing Intercom engagement data, segment performance, conversation response times, and workflow activity.
 
-## Creating a project
+This project is designed to help support, operations, and analytics teams explore Intercom conversations, segments, and custom attributes using a fast, interactive UI.
 
-If you're seeing this, you've probably already done this step. Congrats!
+---
 
-```sh
-# create a new project in the current directory
-npx sv create
+## ✨ Features
 
-# create a new project in my-app
-npx sv create my-app
+- 📊 **Engagement Reporting**
+  - Message / conversation volume over time
+  - Response time distributions (e.g. >24h, >48h)
+  - Unreplied or overdue conversations
+
+- 👥 **Segment & Workflow Insights**
+  - Performance by Intercom segment or tag
+  - Visibility into testing / QA workflows
+  - Drill-down into specific cohorts
+
+- 📈 **Coaching & Operations Dashboards**
+  - Unique members with recent coaching sessions
+  - Time-since-last-session buckets (e.g. <8 days, 8–28, 29–56, >56)
+  - Channel-based filtering (Phone, Video Conference, Chat, etc.)
+
+- ⚙️ **Configurable Data Sources**
+  - Intercom API integration (planned / configurable)
+  - CSV / NDJSON ingestion for offline or batch exports
+
+---
+
+## 🧱 Tech Stack
+
+- **Framework:** SvelteKit  
+- **Language:** TypeScript  
+- **Build Tool:** Vite  
+- **Runtime:** Node.js  
+- **Testing:** Vitest (and Playwright if configured)  
+- **Styling:** (Tailwind CSS / other – update as appropriate)
+
+---
+
+## 🚀 Getting Started
+
+### 1. Prerequisites
+
+- [Node.js](https://nodejs.org/) (LTS recommended)
+- npm, pnpm, or yarn
+
+Check versions:
+
+```bash
+node -v
+npm -v
 ```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
