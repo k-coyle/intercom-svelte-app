@@ -1,23 +1,44 @@
-node_modules
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
 
-# Output
-.output
-.vercel
-.netlify
-.wrangler
-/.svelte-kit
-/build
+# SvelteKit / Vite
+.build/
+.svelte-kit/
+.vite/
+dist/
+build/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Env
+# Env & local config
 .env
 .env.*
 !.env.example
-!.env.test
+*.local
 
-# Vite
-vite.config.js.timestamp-*
-vite.config.ts.timestamp-*
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*.log
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Coverage / test output
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+junit.xml
+
+# Misc
+*.tsbuildinfo
