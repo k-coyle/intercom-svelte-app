@@ -44,7 +44,7 @@ interface SessionDetailRow {
 
 interface MemberBuckets {
   last_8_days: boolean;
-  last_31_days: boolean;
+  days_9_to_30: boolean;
   days_31_to_61: boolean;
   over_61_days: boolean;
 }
@@ -65,7 +65,7 @@ interface CaseloadMemberRow {
 
 interface CaseloadSummary {
   last_8_days: number;
-  last_31_days: number;
+  days_9_to_30: number;
   days_31_to_61: number;
   over_61_days: number;
 }
@@ -228,9 +228,9 @@ async function fetchAdmins(): Promise<Map<string, AdminInfo>> {
 function computeBuckets(daysSince: number): MemberBuckets {
   return {
     last_8_days: daysSince <= 7,
-    last_31_days: daysSince <= 30,
-    days_31_to_61: daysSince >= 31 && daysSince <= 61,
-    over_61_days: daysSince > 61
+    days_9_to_30: daysSince >= 8 && daysSince <= 30,
+    days_31_to_61: daysSince >= 31 && daysSince <= 60,
+    over_61_days: daysSince > 60
   };
 }
 
@@ -396,14 +396,14 @@ async function runCaseloadReport(lookbackDays: number): Promise<CaseloadReport> 
   // 8) Summary counts (member-level buckets)
   const summary: CaseloadSummary = {
     last_8_days: 0,
-    last_31_days: 0,
+    days_9_to_30: 0,
     days_31_to_61: 0,
     over_61_days: 0
   };
 
   for (const m of members) {
     if (m.buckets.last_8_days) summary.last_8_days += 1;
-    if (m.buckets.last_31_days) summary.last_31_days += 1;
+    if (m.buckets.days_9_to_30) summary.days_9_to_30 += 1;
     if (m.buckets.days_31_to_61) summary.days_31_to_61 += 1;
     if (m.buckets.over_61_days) summary.over_61_days += 1;
   }

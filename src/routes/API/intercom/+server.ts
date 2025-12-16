@@ -107,8 +107,8 @@ async function getContact(contactId: string): Promise<any> {
  * Classify engagement bucket.
  */
 function classifyEngagement(daysSince: number): string {
-  if (daysSince <= 28) return 'Engaged';
-  if (daysSince <= 56) return 'At Risk';
+  if (daysSince <= 30) return 'Engaged';
+  if (daysSince <= 60) return 'At Risk';
   return 'Unengaged';
 }
 
