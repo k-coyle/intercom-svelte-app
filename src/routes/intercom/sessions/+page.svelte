@@ -16,9 +16,9 @@
 
   interface CaseloadSummary {
     last_8_days: number;
-    last_29_days: number;
-    days_29_to_56: number;
-    over_56_days: number;
+    last_30_days: number;
+    days_30_to_60: number;
+    over_60_days: number;
   }
 
   interface CaseloadMemberRow {
@@ -34,9 +34,9 @@
     daysSinceLastSession: number;
     buckets: {
       last_8_days: boolean;
-      last_29_days: boolean;
-      days_29_to_56: boolean;
-      over_56_days: boolean;
+      last_30_days: boolean;
+      days_30_to_60: boolean;
+      over_60_days: boolean;
     };
   }
 
@@ -54,12 +54,15 @@
     name: string;
   }
 
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
   // Active report for this page
   let report: CaseloadReport | null = null;
 
   // Cached report in memory for this browser session
   let cachedReport: CaseloadReport | null = null;
   let lastLoadedLookbackDays: number | null = null;
+  let effectiveLookbackDays: number | null = null;
 
   let loading = false;
   let error: string | null = null;
@@ -87,10 +90,13 @@
   // Sessions to display after coach/client/channel filters
   let filteredSessions: SessionDetailRow[] = [];
 
+  // Sessions after ALL filters (including custom date range)
+  let visibleSessions: SessionDetailRow[] = [];
+
   // Metrics
   let totalLast8Days = 0;
-  let totalLast28Days = 0;
-  let totalLast57Days = 0;
+  let totalLast30Days = 0;
+  let totalLast60Days = 0;
   let totalInCustomRange = 0;
 
   function buildDerivedFiltersFrom(source: CaseloadReport | null) {
@@ -119,19 +125,31 @@
   }
 
   function ensureRangeDefaults() {
-    if (!report || !report.sessions.length) return;
-    if (rangeStart && rangeEnd) return; // user already set
+    if (!report) return;
 
-    const timesMs = report.sessions.map((s) => s.time * 1000);
-    const minMs = Math.min(...timesMs);
-    const maxMs = Math.max(...timesMs);
+    // Use the report's generation time as the "today" anchor
+    const generated = new Date(report.generatedAt);
+    if (Number.isNaN(generated.getTime())) {
+      // Fallback: use min/max session times if generatedAt is weird
+      if (!report.sessions.length) return;
+      const timesMs = report.sessions.map((s) => s.time * 1000);
+      const minMs = Math.min(...timesMs);
+      const maxMs = Math.max(...timesMs);
+      rangeStart = toDateInputValue(new Date(minMs));
+      rangeEnd = toDateInputValue(new Date(maxMs));
+      return;
+    }
 
-    const startDate = new Date(minMs);
-    const endDate = new Date(maxMs);
+    const endDate = generated;
+
+    // Inclusive window: e.g. lookbackDays=30 -> 30 calendar days including endDate
+    const startMs = endDate.getTime() - (report.lookbackDays - 1) * MS_PER_DAY;
+    const startDate = new Date(startMs);
 
     rangeStart = toDateInputValue(startDate);
     rangeEnd = toDateInputValue(endDate);
   }
+
 
   function toDateInputValue(date: Date): string {
     const year = date.getFullYear();
@@ -143,12 +161,15 @@
   function applyFiltersAndMetrics() {
     if (!report) {
       filteredSessions = [];
-      totalLast8Days = totalLast28Days = totalLast57Days = totalInCustomRange = 0;
+      totalLast8Days = totalLast30Days = totalLast60Days = totalInCustomRange = 0;
       return;
     }
 
     let sessions = report.sessions;
 
+    if (effectiveLookbackDays != null) {
+      sessions = sessions.filter((s) => s.daysSince <= effectiveLookbackDays!);
+    }
     // Coach filter
     if (selectedCoachId) {
       sessions = sessions.filter((s) => s.coachId === selectedCoachId);
@@ -169,40 +190,36 @@
 
     filteredSessions = sessions;
 
-    // Metrics: last 8/28/56 days (relative to "now" from backend)
-    totalLast8Days = filteredSessions.filter((s) => s.daysSince <= 7).length;
-    totalLast28Days = filteredSessions.filter((s) => s.daysSince <= 28).length;
-    totalLast57Days = filteredSessions.filter((s) => s.daysSince <= 56).length;
+    // Apply custom date range as a real filter (so table + buckets react)
+    let minMs = -Infinity;
+    let maxMs = Infinity;
 
-    // Custom date range metric
-    if (!report.sessions.length) {
-      totalInCustomRange = 0;
-      return;
-    }
-
-    const allTimesMs = report.sessions.map((s) => s.time * 1000);
-    let minMs = Math.min(...allTimesMs);
-    let maxMs = Math.max(...allTimesMs);
-
-    // Use user-specified dates if present; otherwise full loaded window
     if (rangeStart) {
       const d = new Date(rangeStart);
       if (!Number.isNaN(d.getTime())) {
         minMs = d.getTime();
       }
     }
+
     if (rangeEnd) {
       const d = new Date(rangeEnd);
       if (!Number.isNaN(d.getTime())) {
         // inclusive end-of-day
-        maxMs = d.getTime() + 24 * 60 * 60 * 1000 - 1;
+        maxMs = d.getTime() + MS_PER_DAY - 1;
       }
     }
 
-    totalInCustomRange = filteredSessions.filter((s) => {
+    visibleSessions = filteredSessions.filter((s) => {
       const ms = s.time * 1000;
       return ms >= minMs && ms <= maxMs;
-    }).length;
+    });
+
+    // Now compute ALL metrics from visibleSessions
+    totalInCustomRange = visibleSessions.length;
+
+    totalLast8Days = visibleSessions.filter((s) => s.daysSince <= 7).length;
+    totalLast30Days = visibleSessions.filter((s) => s.daysSince >= 8 && s.daysSince <= 30).length;
+    totalLast60Days = visibleSessions.filter((s) => s.daysSince >= 31 && s.daysSince <= 60).length;
   }
 
   /**
@@ -225,12 +242,14 @@
       if (requested > 365) requested = 365;
       selectedLookbackDays = String(requested);
 
+      // Always update the active lookback filter
+      effectiveLookbackDays = requested;
+
       // Reuse cached data if we already loaded a larger/equal window
       if (cachedReport && lastLoadedLookbackDays !== null && requested <= lastLoadedLookbackDays) {
         report = cachedReport;
         ensureRangeDefaults();
         buildDerivedFiltersFrom(report);
-        applyFiltersAndMetrics();
         return;
       }
 
@@ -253,7 +272,6 @@
 
       ensureRangeDefaults();
       buildDerivedFiltersFrom(report);
-      applyFiltersAndMetrics();
     } catch (e: any) {
       console.error(e);
       error = e?.message ?? String(e);
@@ -262,10 +280,33 @@
     }
   }
 
-  // Recompute whenever report or filter controls change
+  // Recompute whenever report or any filter control changes
   $: if (report) {
+    // explicitly mark dependencies so Svelte tracks them
+    report;
+    selectedCoachId;
+    selectedClient;
+    selectedChannels;
+    rangeStart;
+    rangeEnd;
+    effectiveLookbackDays;
+
     applyFiltersAndMetrics();
   }
+  // Keep the numeric lookback field in sync when the user adjusts the custom date range
+  $: if (report && rangeStart && rangeEnd) {
+    const start = new Date(rangeStart);
+    const end = new Date(rangeEnd);
+
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      const diffMs = end.getTime() - start.getTime();
+      if (diffMs >= 0) {
+        const days = Math.floor(diffMs / MS_PER_DAY) + 1; // inclusive
+        selectedLookbackDays = String(days);
+      }
+    }
+  }
+
 </script>
 
 <style>
@@ -504,12 +545,12 @@
         <div class="metric-value">{totalLast8Days}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Sessions last ≤ 28 days</div>
-        <div class="metric-value">{totalLast28Days}</div>
+        <div class="metric-label">Sessions last 8-30 days</div>
+        <div class="metric-value">{totalLast30Days}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Sessions last ≤ 56 days</div>
-        <div class="metric-value">{totalLast57Days}</div>
+        <div class="metric-label">Sessions last 31-60 days</div>
+        <div class="metric-value">{totalLast60Days}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Sessions in custom date range</div>
@@ -522,7 +563,7 @@
 
     <p class="muted">
       Loaded {report.sessions.length} sessions in the last {report.lookbackDays} days
-      (before filters). Showing {filteredSessions.length} after filters.
+      (before filters). Showing {visibleSessions.length} after filters.
     </p>
 
     <h2>Sessions (filtered)</h2>
@@ -538,7 +579,7 @@
         </tr>
       </thead>
       <tbody>
-        {#each filteredSessions.slice(0, 500) as s}
+        {#each visibleSessions.slice(0, 500) as s}
           <tr>
             <td>{new Date(s.time * 1000).toLocaleString()}</td>
             <td>
