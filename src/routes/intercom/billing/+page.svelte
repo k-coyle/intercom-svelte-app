@@ -24,9 +24,12 @@
   let report: BillingReport | null = null;
   let cachedReport: BillingReport | null = null;
   let lastLoadedMonthLabel: string | null = null;
+  let selectedMonthLabel: string = getCurrentPreviousMonthLabel(); // YYYY-MM
+
 
   let loading = false;
   let error: string | null = null;
+  let loadingStage: string = '';
 
   // Employer filter
   let uniqueEmployers: string[] = [];
@@ -77,14 +80,15 @@
   async function runReport() {
     loading = true;
     error = null;
+    loadingStage = 'Starting report…';
 
     try {
-      const expectedMonth = getCurrentPreviousMonthLabel();
+      const requestedMonth = selectedMonthLabel || getCurrentPreviousMonthLabel();
+      loadingStage = 'Requesting billing report from server…';
 
-      // Reuse cached report if it's for the same previous month
-      if (cachedReport && lastLoadedMonthLabel === expectedMonth) {
+      // Reuse cached report if it’s for the same selected month
+      if (cachedReport && lastLoadedMonthLabel === requestedMonth) {
         report = cachedReport;
-        // Reset filter on "run" for clarity
         selectedEmployer = '';
         buildUniqueEmployers();
         return;
@@ -92,8 +96,11 @@
 
       const res = await fetch('/API/intercom/billing', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monthYearLabel: requestedMonth })
       });
+
+      loadingStage = 'Parsing results…';
 
       if (!res.ok) {
         const text = await res.text();
@@ -105,9 +112,9 @@
       cachedReport = data;
       lastLoadedMonthLabel = data.monthYearLabel;
 
-      // Reset filter on fresh load
       selectedEmployer = '';
       buildUniqueEmployers();
+      loadingStage = 'Done.';
     } catch (e: any) {
       console.error(e);
       error = e?.message ?? String(e);
@@ -115,6 +122,7 @@
       loading = false;
     }
   }
+
 
   function formatDateFromUnix(unix: number | null): string {
     if (unix == null) return '';
@@ -252,7 +260,8 @@
     color: #444;
   }
 
-  select {
+  select,
+  input[type='month'] {
     padding: 0.35rem 0.5rem;
     border-radius: 0.25rem;
     border: 1px solid #ccc;
@@ -379,9 +388,16 @@
       {:else if report}
         Reload from cache / Intercom
       {:else}
-        Run billing report (previous month)
+        Run billing report
       {/if}
     </button>
+
+    </div>
+      <div class="filter-group" style="min-width: 180px;">
+      <label for="month">Month</label>
+      <input id="month" type="month" bind:value={selectedMonthLabel} />
+      <div class="muted">Select the calendar month to generate billing for.</div>
+    </div>
 
     {#if report}
       <button class="secondary" on:click={exportCsv}>
@@ -394,7 +410,6 @@
         {new Date(report.generatedAt).toLocaleString()}
       </div>
     {/if}
-  </div>
 
   {#if report}
     <div class="filters">

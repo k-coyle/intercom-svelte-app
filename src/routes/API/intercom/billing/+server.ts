@@ -16,8 +16,13 @@ const REGISTRATION_ATTR_KEY = 'Registration Date';
 const EMPLOYER_ATTR_KEY = 'Employer';
 const CHANNEL_ATTR_KEY = 'Channel';
 
+// Engagement definition
+const ENGAGED_DAYS = 60; // "<60 days ago"
+const ENGAGED_TAIL_DAYS = ENGAGED_DAYS - 1; // 59
+const REPORT_TZ = 'America/New_York';
+
 // Channels that count as "coaching sessions"
-const SESSION_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
+const SESSION_CHANNELS = ['Phone', 'Video Conference'] as const;
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
 
 interface BillingRow {
@@ -87,7 +92,8 @@ async function searchClosedConversationsBetween(
         value: [
           { field: 'state', operator: '=', value: 'closed' },
           { field: 'updated_at', operator: '>', value: startUnix },
-          { field: 'updated_at', operator: '<=', value: endUnix }
+          { field: 'updated_at', operator: '<=', value: endUnix },
+          {field: 'source.type', operator: 'NIN', value: ['email']} // This fiter is trying to remove email conversations!!! Might need to be adjusted later
         ]
       },
       pagination: {
@@ -256,49 +262,156 @@ function computePreviousCalendarMonth(): {
   };
 }
 
+function getTzOffsetMinutes(date: Date, timeZone: string): number {
+  // Compute offset by comparing the same instant rendered in UTC vs rendered in timeZone
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+
+  const parts = dtf.formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+
+  const y = get('year');
+  const m = get('month');
+  const d = get('day');
+  const hh = get('hour');
+  const mm = get('minute');
+  const ss = get('second');
+
+  // This is what the timeZone "says" the instant is, expressed as if it were UTC.
+  const asIfUtc = Date.UTC(y, m - 1, d, hh, mm, ss);
+  return Math.round((asIfUtc - date.getTime()) / 60000);
+}
+
+function zonedTimeToUtcUnix(
+  year: number,
+  monthIndex0: number, // 0-11
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  timeZone: string
+): number {
+  // Start with a naive UTC guess for the local wall clock time
+  const guessUtcMs = Date.UTC(year, monthIndex0, day, hour, minute, second);
+
+  // Determine the actual offset at that instant in the given time zone
+  const offsetMin = getTzOffsetMinutes(new Date(guessUtcMs), timeZone);
+
+  // Subtract offset to convert local wall time to UTC
+  const utcMs = guessUtcMs - offsetMin * 60_000;
+  return Math.floor(utcMs / 1000);
+}
+
+function computeMonthWindowNY(monthYearLabel: string): {
+  year: number;
+  month: number; // 1-12
+  monthStartUnix: number;
+  monthEndUnix: number; // start of next month in NY, as UTC unix seconds
+  monthStartISO: string;
+  monthEndISO: string;
+} {
+  const m = /^(\d{4})-(\d{2})$/.exec(monthYearLabel);
+  if (!m) throw new Error(`Invalid monthYearLabel: ${monthYearLabel} (expected YYYY-MM)`);
+
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) throw new Error(`Invalid month: ${month}`);
+
+  const monthIndex0 = month - 1;
+
+  // NY local: start at 00:00:00 on the 1st
+  const monthStartUnix = zonedTimeToUtcUnix(year, monthIndex0, 1, 0, 0, 0, REPORT_TZ);
+
+  // NY local: start of next month 00:00:00
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonthIndex0 = month === 12 ? 0 : monthIndex0 + 1;
+  const monthEndUnix = zonedTimeToUtcUnix(nextYear, nextMonthIndex0, 1, 0, 0, 0, REPORT_TZ);
+
+  return {
+    year,
+    month,
+    monthStartUnix,
+    monthEndUnix,
+    monthStartISO: new Date(monthStartUnix * 1000).toISOString(),
+    monthEndISO: new Date(monthEndUnix * 1000).toISOString()
+  };
+}
+
 /**
  * Build billing report for previous calendar month.
  */
-async function runBillingReport(): Promise<BillingReport> {
+async function runBillingReport(monthYearLabel: string): Promise<BillingReport> {
+  const startedAt = Date.now();
+
   const {
     year,
     month,
     monthStartUnix,
     monthEndUnix,
-    monthStartDate,
-    monthEndDate
-  } = computePreviousCalendarMonth();
+    monthStartISO,
+    monthEndISO
+  } = computeMonthWindowNY(monthYearLabel);
 
-  const monthYearLabel = `${year}-${String(month).padStart(2, '0')}`;
+  console.log(`Billing: START month=${monthYearLabel}`);
+  console.log(`Billing: window start=${monthStartISO} end=${monthEndISO}`);
+
+  // Tail window for "<60 days ago at least one day during month"
+  const engagedTailWindowStartUnix = monthStartUnix - ENGAGED_TAIL_DAYS * SECONDS_PER_DAY;
   console.log(
-    `Billing report for ${monthYearLabel}: monthStart=${new Date(
-      monthStartUnix * 1000
-    ).toISOString()}, monthEnd=${new Date(monthEndUnix * 1000).toISOString()}`
+    `Billing: tail window start=${new Date(engagedTailWindowStartUnix * 1000).toISOString()}`
   );
 
-  // Engagement tail window: we need sessions that could keep a user engaged
-  // for at least one day *inside* the month.
-  const engagedTailWindowStartUnix = monthStartUnix - 56 * SECONDS_PER_DAY;
+  // 1) Fetch conversations
+  console.log(`Billing: [1/5] Fetching closed conversations (paginated)…`);
+  const t1 = Date.now();
 
-  // 1) Get all closed conversations in [engagedTailWindowStartUnix, monthEndUnix]
   const conversations = await searchClosedConversationsBetween(
     engagedTailWindowStartUnix,
-    monthEndUnix
+    monthEndUnix - 1
   );
 
-  // 2) Track last coaching session time per member within that window
+  console.log(
+    `Billing: [1/5] Done. conversations=${conversations.length} (${Date.now() - t1}ms)`
+  );
+
+  // 2) Process conversations → lastSessionByMember
+  console.log(`Billing: [2/5] Processing conversations → last session per member…`);
+  const t2 = Date.now();
+
   const lastSessionByMember = new Map<string, number>();
+  let skippedNoChannel = 0;
+  let skippedBadChannel = 0;
+  let skippedNoContact = 0;
+  let skippedNoSessionTime = 0;
+  let skippedOutOfWindow = 0;
 
   for (const conv of conversations) {
     try {
       const attrs = conv.custom_attributes || {};
       const channelValue = attrs[CHANNEL_ATTR_KEY] as string | undefined;
-      if (!channelValue) continue;
+      if (!channelValue) {
+        skippedNoChannel++;
+        continue;
+      }
 
-      if (!SESSION_CHANNELS.includes(channelValue as SessionChannel)) continue;
+      if (!SESSION_CHANNELS.includes(channelValue as SessionChannel)) {
+        skippedBadChannel++;
+        continue;
+      }
 
       const contactsList = conv.contacts?.contacts || [];
-      if (!contactsList.length) continue;
+      if (!contactsList.length) {
+        skippedNoContact++;
+        continue;
+      }
 
       const memberId = String(contactsList[0].id);
 
@@ -309,109 +422,116 @@ async function runBillingReport(): Promise<BillingReport> {
         conv.updated_at ||
         conv.created_at;
 
-      if (!sessionTime) continue;
+      if (!sessionTime) {
+        skippedNoSessionTime++;
+        continue;
+      }
 
-      if (
-        sessionTime < engagedTailWindowStartUnix ||
-        sessionTime > monthEndUnix
-      ) {
+      if (sessionTime < engagedTailWindowStartUnix || sessionTime >= monthEndUnix) {
+        skippedOutOfWindow++;
         continue;
       }
 
       const prev = lastSessionByMember.get(memberId) ?? 0;
-      if (sessionTime > prev) {
-        lastSessionByMember.set(memberId, sessionTime);
-      }
+      if (sessionTime > prev) lastSessionByMember.set(memberId, sessionTime);
     } catch (err: any) {
       console.error(`Billing: error processing conversation ${conv.id}:`, err?.message ?? err);
     }
   }
 
   console.log(
-    `Billing: members with at least one coaching session in tail window: ${lastSessionByMember.size}`
+    `Billing: [2/5] Done. membersWithSessions=${lastSessionByMember.size} (${Date.now() - t2}ms)`
+  );
+  console.log(
+    `Billing: skips noChannel=${skippedNoChannel}, badChannel=${skippedBadChannel}, noContact=${skippedNoContact}, noSessionTime=${skippedNoSessionTime}, outOfWindow=${skippedOutOfWindow}`
   );
 
-  // 3) New participants in the month (Registration Date in [monthStart, monthEnd))
-  const newParticipantIds = await searchNewParticipantsInMonth(
-    monthStartUnix,
-    monthEndUnix
+  // 3) New participants in the month
+  console.log(`Billing: [3/5] Searching new participants (contacts)…`);
+  const t3 = Date.now();
+
+  const newParticipantIds = await searchNewParticipantsInMonth(monthStartUnix, monthEndUnix);
+
+  console.log(
+    `Billing: [3/5] Done. newParticipants=${newParticipantIds.size} (${Date.now() - t3}ms)`
   );
 
-  // 4) Engaged participants in the month:
-  // Engaged if there exists a day in month where "last coaching session < 57 days ago".
-  // Equivalent conditions for lastSessionAt:
-  //   - lastSessionAt <= monthEndUnix
-  //   - lastSessionAt >= monthStartUnix - 56 days
+  // 4) Engaged participants in the month
+  console.log(`Billing: [4/5] Computing engaged set…`);
+  const t4 = Date.now();
+
   const engagedIds = new Set<string>();
-  const engagedLowerBound = monthStartUnix - 56 * SECONDS_PER_DAY;
+  const engagedLowerBound = monthStartUnix - ENGAGED_TAIL_DAYS * SECONDS_PER_DAY;
 
   for (const [memberId, lastSessionAt] of lastSessionByMember.entries()) {
-    if (
-      lastSessionAt >= engagedLowerBound &&
-      lastSessionAt <= monthEndUnix
-    ) {
+    if (lastSessionAt >= engagedLowerBound && lastSessionAt < monthEndUnix) {
       engagedIds.add(memberId);
     }
   }
 
-  console.log(`Billing: engaged participants in month: ${engagedIds.size}`);
+  console.log(
+    `Billing: [4/5] Done. engaged=${engagedIds.size} (${Date.now() - t4}ms)`
+  );
 
-  // 5) Union of IDs we care about: new participants in month OR engaged during month
+  // 5) Union & fetch contact details
   const unionIdsSet = new Set<string>();
   for (const id of newParticipantIds) unionIdsSet.add(id);
   for (const id of engagedIds) unionIdsSet.add(id);
   const unionIds = Array.from(unionIdsSet);
 
-  console.log(`Billing: total unique billable members: ${unionIds.length}`);
+  console.log(`Billing: union billable members=${unionIds.length}`);
 
   if (unionIds.length === 0) {
+    console.log(`Billing: END (0 rows) totalTime=${Date.now() - startedAt}ms`);
     return {
       year,
       month,
       monthYearLabel,
-      monthStart: monthStartDate.toISOString(),
-      monthEnd: monthEndDate.toISOString(),
+      monthStart: monthStartISO,
+      monthEnd: monthEndISO,
       generatedAt: new Date().toISOString(),
       totalRows: 0,
       rows: []
     };
   }
 
-  // 6) Fetch contact details for all union IDs
+  console.log(`Billing: [5/5] Fetching contact details for ${unionIds.length} members…`);
+  const t5 = Date.now();
+
   const contactDetails = await fetchContactsDetails(unionIds);
 
+  console.log(
+    `Billing: [5/5] Done. fetchedContacts=${contactDetails.size} (${Date.now() - t5}ms)`
+  );
+
   const rows: BillingRow[] = [];
+  let missingContacts = 0;
 
   for (const memberId of unionIds) {
     const contact = contactDetails.get(memberId);
-    if (!contact) continue;
+    if (!contact) {
+      missingContacts++;
+      continue;
+    }
 
     const attrs = contact.custom_attributes || {};
 
-    // Registration Date
     const regRaw = attrs[REGISTRATION_ATTR_KEY];
     let registrationAt: number | null = null;
 
-    if (typeof regRaw === 'number') {
-      registrationAt = regRaw;
-    } else if (typeof regRaw === 'string') {
+    if (typeof regRaw === 'number') registrationAt = regRaw;
+    else if (typeof regRaw === 'string') {
       const parsed = Date.parse(regRaw);
-      if (!Number.isNaN(parsed)) {
-        registrationAt = Math.floor(parsed / 1000);
-      }
+      if (!Number.isNaN(parsed)) registrationAt = Math.floor(parsed / 1000);
     }
 
     const isNewParticipant =
-      registrationAt !== null &&
-      registrationAt >= monthStartUnix &&
-      registrationAt < monthEndUnix;
+      registrationAt !== null && registrationAt >= monthStartUnix && registrationAt < monthEndUnix;
 
     const lastSessionAt = lastSessionByMember.get(memberId) ?? null;
 
     const engagedDuringMonth =
-      lastSessionAt !== null &&
-      lastSessionAt >= engagedLowerBound &&
-      lastSessionAt <= monthEndUnix;
+      lastSessionAt !== null && lastSessionAt >= engagedLowerBound && lastSessionAt < monthEndUnix;
 
     const employerRaw = attrs[EMPLOYER_ATTR_KEY];
     const employer =
@@ -421,13 +541,10 @@ async function runBillingReport(): Promise<BillingReport> {
         ? String(employerRaw)
         : null;
 
-    const memberName = contact.name ?? null;
-    const memberEmail = contact.email ?? null;
-
     rows.push({
       memberId,
-      memberName,
-      memberEmail,
+      memberName: contact.name ?? null,
+      memberEmail: contact.email ?? null,
       employer,
       registrationAt,
       lastSessionAt,
@@ -436,7 +553,6 @@ async function runBillingReport(): Promise<BillingReport> {
     });
   }
 
-  // Sort rows (Employer → Name → ID)
   rows.sort((a, b) => {
     const ae = a.employer ?? '';
     const be = b.employer ?? '';
@@ -449,23 +565,39 @@ async function runBillingReport(): Promise<BillingReport> {
     return a.memberId.localeCompare(b.memberId);
   });
 
+  console.log(
+    `Billing: rows=${rows.length} (missingContacts=${missingContacts}) totalTime=${Date.now() - startedAt}ms`
+  );
+  console.log(`Billing: END month=${monthYearLabel}`);
+
   return {
     year,
     month,
     monthYearLabel,
-    monthStart: monthStartDate.toISOString(),
-    monthEnd: monthEndDate.toISOString(),
+    monthStart: monthStartISO,
+    monthEnd: monthEndISO,
     generatedAt: new Date().toISOString(),
     totalRows: rows.length,
     rows
   };
 }
 
+
 // ---------- SvelteKit handler ----------
 
-export const POST: RequestHandler = async () => {
+export const POST: RequestHandler = async ({ request }) => {
   try {
-    const report = await runBillingReport();
+    const body = await request.json().catch(() => ({}));
+    const monthYearLabel = String(body?.monthYearLabel ?? '').trim();
+
+    if (!monthYearLabel) {
+      return new Response(
+        JSON.stringify({ error: 'monthYearLabel is required (YYYY-MM)' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const report = await runBillingReport(monthYearLabel);
 
     return new Response(JSON.stringify(report), {
       headers: { 'Content-Type': 'application/json' }
