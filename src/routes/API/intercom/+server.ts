@@ -4,7 +4,7 @@ import {INTERCOM_ACCESS_TOKEN, INTERCOM_VERSION, INTERCOM_API_BASE } from '$env/
 const INTERCOM_BASE_URL = INTERCOM_API_BASE || 'https://api.intercom.io';
 const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 
-const PEOPLE_ATTR_LAST_CALL_KEY = 'Last Coaching Call';
+const PEOPLE_ATTR_LAST_CALL_KEY = 'Last Coaching Session';
 const PEOPLE_ATTR_STATUS_KEY = 'Engagement Status';
 const CHANNEL_ATTR_KEY = 'Channel';
 const CHANNEL_CALL_VALUES = ['Phone', 'Video Conference'] as const;
@@ -107,8 +107,8 @@ async function getContact(contactId: string): Promise<any> {
  * Classify engagement bucket.
  */
 function classifyEngagement(daysSince: number): string {
-  if (daysSince <= 30) return 'Engaged';
-  if (daysSince <= 60) return 'At Risk';
+  if (daysSince <= 28) return 'Engaged';
+  if (daysSince <= 56) return 'At Risk';
   return 'Unengaged';
 }
 
