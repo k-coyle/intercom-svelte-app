@@ -3,10 +3,10 @@
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
 
   interface MemberBuckets {
-    last_8_days: boolean;
-    last_31_days: boolean;
-    days_31_to_61: boolean;
-    over_61_days: boolean;
+    bucket_1: boolean;
+    bucket_2: boolean;
+    bucket_3: boolean;
+    bucket_4: boolean;
   }
 
   interface CaseloadMemberRow {
@@ -24,10 +24,10 @@
   }
 
   interface CaseloadSummary {
-    last_8_days: number;
-    last_31_days: number;
-    days_31_to_61: number;
-    over_61_days: number;
+    bucket_1: number;
+    bucket_2: number;
+    bucket_3: number;
+    bucket_4: number;
   }
 
   interface CaseloadReport {
@@ -40,10 +40,10 @@
 
   interface BucketRow {
     channelCombo: string;
-    last_8_days: number;
-    last_31_days: number;
-    days_31_to_61: number;
-    over_61_days: number;
+    bucket_1: number;
+    bucket_2: number;
+    bucket_3: number;
+    bucket_4: number;
   }
 
   interface CoachOption {
@@ -158,19 +158,19 @@
       if (!map.has(key)) {
         map.set(key, {
           channelCombo: key,
-          last_8_days: 0,
-          last_31_days: 0,
-          days_31_to_61: 0,
-          over_61_days: 0
+          bucket_1: 0,
+          bucket_2: 0,
+          bucket_3: 0,
+          bucket_4: 0
         });
       }
 
       const row = map.get(key)!;
 
-      if (m.buckets.last_8_days) row.last_8_days += 1;
-      if (m.buckets.last_31_days) row.last_31_days += 1;
-      if (m.buckets.days_31_to_61) row.days_31_to_61 += 1;
-      if (m.buckets.over_61_days) row.over_61_days += 1;
+      if (m.buckets.bucket_1) row.bucket_1 += 1;
+      if (m.buckets.bucket_2) row.bucket_2 += 1;
+      if (m.buckets.bucket_3) row.bucket_3 += 1;
+      if (m.buckets.bucket_4) row.bucket_4 += 1;
     }
 
     bucketTable = Array.from(map.values()).sort((a, b) =>
@@ -472,10 +472,10 @@
       </div>
       <div>
         <strong>Raw summary (all members, loaded window):</strong>
-        &lt; 8 days: {report.summary.last_8_days} ·
-        &lt; 31 days: {report.summary.last_31_days} ·
-        31–61 days: {report.summary.days_31_to_61} ·
-        &gt; 61 days: {report.summary.over_61_days}
+        &le; 7 days: {report.summary.bucket_1} ·
+        8-28 days: {report.summary.bucket_2} ·
+        29–56 days: {report.summary.bucket_3} ·
+        &gt; 56 days: {report.summary.bucket_4}
       </div>
       <div class="muted">
         Generated at {new Date(report.generatedAt).toLocaleString()} · Loaded lookback = {report.lookbackDays} days
@@ -490,30 +490,30 @@
         <thead>
           <tr>
             <th>Channel combination</th>
-            <th>&lt; 8 days</th>
-            <th>&lt; 31 days</th>
-            <th>31–61 days</th>
-            <th>&gt; 61 days</th>
+            <th>&le; 7 days</th>
+            <th>8-28 days</th>
+            <th>29–56 days</th>
+            <th>&gt; 56 days</th>
           </tr>
         </thead>
         <tbody>
           {#each bucketTable as row}
             <tr>
               <td>{row.channelCombo}</td>
-              <td>{row.last_8_days}</td>
-              <td>{row.last_31_days}</td>
-              <td>{row.days_31_to_61}</td>
-              <td>{row.over_61_days}</td>
+              <td>{row.bucket_1}</td>
+              <td>{row.bucket_2}</td>
+              <td>{row.bucket_3}</td>
+              <td>{row.bucket_4}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
           <tr>
             <td>Total</td>
-            <td>{bucketTable.reduce((sum, r) => sum + r.last_8_days, 0)}</td>
-            <td>{bucketTable.reduce((sum, r) => sum + r.last_31_days, 0)}</td>
-            <td>{bucketTable.reduce((sum, r) => sum + r.days_31_to_61, 0)}</td>
-            <td>{bucketTable.reduce((sum, r) => sum + r.over_61_days, 0)}</td>
+            <td>{bucketTable.reduce((sum, r) => sum + r.bucket_1, 0)}</td>
+            <td>{bucketTable.reduce((sum, r) => sum + r.bucket_2, 0)}</td>
+            <td>{bucketTable.reduce((sum, r) => sum + r.bucket_3, 0)}</td>
+            <td>{bucketTable.reduce((sum, r) => sum + r.bucket_4, 0)}</td>
           </tr>
         </tfoot>
       </table>
@@ -561,14 +561,15 @@
             <td>{new Date(m.lastSessionAt * 1000).toLocaleDateString()}</td>
             <td>{m.daysSinceLastSession.toFixed(1)}</td>
             <td>
-              {#if m.buckets.last_8_days}
-                &lt; 8 days
-              {:else if m.buckets.days_31_to_61}
-                31–61 days
-              {:else if m.buckets.over_61_days}
-                &gt; 61 days
-              {:else if m.buckets.last_31_days}
-                &lt; 31 days
+              {#if m.buckets.bucket_1}
+                &le; 7 days
+              {:else if m.buckets.bucket_2}
+                 8-28 days                
+              {:else if m.buckets.bucket_3}
+                29–56 days
+              {:else if m.buckets.bucket_4}
+                &gt; 56 days
+
               {:else}
                 —
               {/if}

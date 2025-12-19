@@ -64,10 +64,10 @@
   // Filtered participants + metrics
   let filteredParticipants: ParticipantRow[] = [];
 
-  let countNoSession = 0;
-  let countNoSessionOver14 = 0;
-  let countNoSessionOver21 = 0;
-  let countNoSessionOver28 = 0;
+  let countNoSession_0 = 0;
+  let countNoSession_1 = 0;
+  let countNoSession_2 = 0;
+  let countNoSession_3 = 0;
 
   function toDateInputValue(date: Date): string {
     const year = date.getFullYear();
@@ -118,7 +118,7 @@
   function applyFiltersAndMetrics() {
     if (!report) {
       filteredParticipants = [];
-      countNoSession = countNoSessionOver14 = countNoSessionOver21 = countNoSessionOver28 = 0;
+      countNoSession_0 = countNoSession_1 = countNoSession_2 = countNoSession_3 = 0;
       return;
     }
 
@@ -175,15 +175,15 @@
 
     const noSessionRows = filteredParticipants.filter((p) => !p.hasSession);
 
-    countNoSession = noSessionRows.length;
-    countNoSessionOver14 = noSessionRows.filter(
+    countNoSession_0 = noSessionRows.length;
+    countNoSession_1 = noSessionRows.filter(
       (p) => p.daysSinceRegistration > 14
     ).length;
-    countNoSessionOver21 = noSessionRows.filter(
-      (p) => p.daysSinceRegistration > 21
-    ).length;
-    countNoSessionOver28 = noSessionRows.filter(
+    countNoSession_2 = noSessionRows.filter(
       (p) => p.daysSinceRegistration > 28
+    ).length;
+    countNoSession_3 = noSessionRows.filter(
+      (p) => p.daysSinceRegistration > 56
     ).length;
   }
 
@@ -480,19 +480,19 @@
     <div class="metrics">
       <div class="metric-card">
         <div class="metric-label">New participants with no session</div>
-        <div class="metric-value">{countNoSession}</div>
+        <div class="metric-value">{countNoSession_0}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">No session &gt; 14 days</div>
-        <div class="metric-value">{countNoSessionOver14}</div>
+        <div class="metric-value">{countNoSession_1}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">No session &gt; 21 days</div>
-        <div class="metric-value">{countNoSessionOver21}</div>
+        <div class="metric-label">No session &gt; 28 days</div>
+        <div class="metric-value">{countNoSession_2}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">No session &gt; 28 days (Unengaged)</div>
-        <div class="metric-value">{countNoSessionOver28}</div>
+        <div class="metric-label">No session &gt; 56 days (Unengaged)</div>
+        <div class="metric-value">{countNoSession_3}</div>
       </div>
     </div>
 

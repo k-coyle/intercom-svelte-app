@@ -17,8 +17,8 @@ const EMPLOYER_ATTR_KEY = 'Employer';
 const CHANNEL_ATTR_KEY = 'Channel';
 
 // Engagement definition
-const ENGAGED_DAYS = 60; // "<60 days ago"
-const ENGAGED_TAIL_DAYS = ENGAGED_DAYS - 1; // 59
+const ENGAGED_DAYS = 57; // "<57 days ago"
+const ENGAGED_TAIL_DAYS = ENGAGED_DAYS - 1; // 56
 const REPORT_TZ = 'America/New_York';
 
 // Channels that count as "coaching sessions"
@@ -93,7 +93,7 @@ async function searchClosedConversationsBetween(
           { field: 'state', operator: '=', value: 'closed' },
           { field: 'updated_at', operator: '>', value: startUnix },
           { field: 'updated_at', operator: '<=', value: endUnix },
-          {field: 'source.type', operator: 'NIN', value: ['email']} // This fiter is trying to remove email conversations!!! Might need to be adjusted later
+          { field: 'source.type', operator: 'NIN', value: ['email']} // This fiter is trying to remove email conversations!!! Might need to be adjusted later
         ]
       },
       pagination: {

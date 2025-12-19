@@ -19,9 +19,9 @@
         'Shows how many unique members a coach is actively working with, segmented by recency of their last coaching session and communication channel combination.',
       primaryAudience: 'Coaches, Clinical/Operations Leads, Program Managers',
       metrics: [
-        'Unique members with a coaching session in the last <8 days',
-        'Unique members with a coaching session in the last <29 days',
-        'Unique members with a coaching session >28 & <57 days ago',
+        'Unique members with a coaching session in the last <=7 days',
+        'Unique members with a coaching session >7 & <=28 days',
+        'Unique members with a coaching session >28 & <=56 days ago',
         'Unique members with a coaching session >56 days ago',
         'Breakdown by channel combination (Phone, Video Conference, Email, Chat)'
       ],
@@ -45,8 +45,8 @@
       primaryAudience: 'Coaches, Ops, Finance, Capacity Planning',
       metrics: [
         'Total coaching sessions in the last <8 days',
-        'Total coaching sessions in the last <28 days',
-        'Total coaching sessions in the last <57 days',
+        'Total coaching sessions in the last <=28 days',
+        'Total coaching sessions in the last <=56 days',
         'Total coaching sessions in a configurable date range'
       ],
       filters: [
@@ -70,8 +70,8 @@
       metrics: [
         'New participants with no coaching session yet',
         'New participants with no session >14 days after registration',
-        'New participants with no session >21 days after registration',
-        'New participants with no session >28 days after registration (considered “Unengaged”)'
+        'New participants with no session >28 days after registration',
+        'New participants with no session >57 days after registration (considered “Unengaged”)'
       ],
       filters: [
         'Assigned Coach',
@@ -103,7 +103,7 @@
       ],
       notes: [
         'Billing window = previous calendar month (e.g., running in October produces a report for September).',
-        'Engaged Participant (for billing) = had a coaching session <57 days ago for at least one day during the billing month.',
+        'Engaged Participant (for billing) = had a coaching session <=56 days ago for at least one day during the billing month.',
         'Table shows top 500 filtered rows; full result set is available via CSV export.',
         'Employer is taken from the custom attribute: Employer.'
       ]

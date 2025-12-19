@@ -374,7 +374,7 @@
   <h1>Billing Report</h1>
   <div class="subtitle">
     Users who became new participants in the previous calendar month or met the engaged criteria
-    (coaching session &lt; 57 days ago) for at least one day during that month.
+    (coaching session &le; 56 days ago) for at least one day during that month.
   </div>
 
   {#if error}

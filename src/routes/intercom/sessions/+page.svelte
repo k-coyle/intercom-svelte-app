@@ -545,11 +545,11 @@
         <div class="metric-value">{totalLast8Days}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Sessions last 8-30 days</div>
+        <div class="metric-label">Sessions last 8-28 days</div>
         <div class="metric-value">{totalLast30Days}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Sessions last 31-60 days</div>
+        <div class="metric-label">Sessions last 29-56 days</div>
         <div class="metric-value">{totalLast60Days}</div>
       </div>
       <div class="metric-card">
