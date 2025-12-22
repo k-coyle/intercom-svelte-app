@@ -2,25 +2,45 @@
 <script lang="ts">
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
 
+  interface ParticipantBuckets {
+    gt_14_to_21: boolean;
+    gt_21_to_28: boolean;
+    gt_28: boolean; // Unengaged for this report
+  }
+
   interface ParticipantRow {
     memberId: string;
     memberName: string | null;
     memberEmail: string | null;
     client: string | null;
-    registrationAt: number;
-    daysSinceRegistration: number;
+    participantAt: number | null; // Registration / Enrolled Date (unix seconds)
+    daysSinceParticipant: number | null;
+
     hasSession: boolean;
+    firstSessionAt: number | null;
     lastSessionAt: number | null;
     daysSinceLastSession: number | null;
+
     coachIds: string[];
     coachNames: string[];
     channelsUsed: SessionChannel[];
+
+    // metric for buckets: days since last session, or since participant date if no sessions
+    daysWithoutSession: number | null;
+    buckets: ParticipantBuckets;
+  }
+
+  interface NewParticipantsSummary {
+    gt_14_to_21: number;
+    gt_21_to_28: number;
+    gt_28: number;
   }
 
   interface NewParticipantsReport {
-    lookbackDays: number;
     generatedAt: string;
+    lookbackDays: number;
     totalParticipants: number;
+    summary: NewParticipantsSummary;
     participants: ParticipantRow[];
   }
 
@@ -29,45 +49,38 @@
     name: string;
   }
 
-  const allChannels: SessionChannel[] = ['Phone', 'Video Conference', 'Email', 'Chat'];
+  const PARTICIPANT_DATE_ATTR_LABEL = 'Registration Date'; // later: switch to "Enrolled Date"
 
-  // Active report
+  // Raw report & cache
   let report: NewParticipantsReport | null = null;
-
-  // Cached (per-page) report
   let cachedReport: NewParticipantsReport | null = null;
   let lastLoadedLookbackDays: number | null = null;
 
+  // UI / control state
   let loading = false;
   let error: string | null = null;
 
-  // Controls
-  let selectedLookbackDays: string = ''; // user enters how far back to look for registration (usually 28)
+  let selectedLookbackDays: string = ''; // user enters before first load
   let selectedCoachId = '';
   let selectedClient = '';
 
-  let selectedChannels: Record<SessionChannel, boolean> = {
-    Phone: true,
-    'Video Conference': true,
-    Email: true,
-    Chat: true
-  };
+  // Participant date range filters (YYYY-MM-DD)
+  let rangeStart = '';
+  let rangeEnd = '';
 
-  // Participant Date range (by registration date)
-  let rangeStart = ''; // YYYY-MM-DD
-  let rangeEnd = '';   // YYYY-MM-DD
-
-  // Derived filters
+  // Derived filter options
   let uniqueCoaches: CoachOption[] = [];
   let uniqueClients: string[] = [];
 
-  // Filtered participants + metrics
+  // Filtered participants for display
   let filteredParticipants: ParticipantRow[] = [];
+  let sortedParticipants: ParticipantRow[] = [];
+  let sortDescendingByDays = true;
 
-  let countNoSession_0 = 0;
-  let countNoSession_1 = 0;
-  let countNoSession_2 = 0;
-  let countNoSession_3 = 0;
+  // Bucket counts for filtered cohort
+  let countGt14To21 = 0;
+  let countGt21To28 = 0;
+  let countGt28 = 0;
 
   function toDateInputValue(date: Date): string {
     const year = date.getFullYear();
@@ -76,19 +89,92 @@
     return `${year}-${month}-${day}`;
   }
 
-  function ensureRangeDefaults() {
-    if (!report || !report.participants.length) return;
-    if (rangeStart && rangeEnd) return;
-
-    const msList = report.participants.map((p) => p.registrationAt * 1000);
-    const minMs = Math.min(...msList);
-    const maxMs = Math.max(...msList);
-
-    rangeStart = toDateInputValue(new Date(minMs));
-    rangeEnd = toDateInputValue(new Date(maxMs));
+  function fromUnixToDateInput(unix: number | null): string {
+    if (!unix) return '';
+    const d = new Date(unix * 1000);
+    if (Number.isNaN(d.getTime())) return '';
+    return toDateInputValue(d);
   }
 
-  function buildDerivedFiltersFrom(source: NewParticipantsReport | null) {
+  function formatUnixDate(unix: number | null): string {
+    if (!unix) return '';
+    const d = new Date(unix * 1000);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleDateString();
+  }
+
+  function bucketLabel(b: ParticipantBuckets): string {
+    if (b.gt_28) return '> 28 days (Unengaged)';
+    if (b.gt_21_to_28) return '22–28 days';
+    if (b.gt_14_to_21) return '15–21 days';
+    return '≤ 14 days';
+  }
+
+  function escapeCsv(value: string): string {
+    if (value.includes('"') || value.includes(',') || value.includes('\n')) {
+      return '"' + value.replace(/"/g, '""') + '"';
+    }
+    return value;
+  }
+
+  function exportCsv() {
+    if (!filteredParticipants.length) {
+      alert('No rows to export. Load data and/or adjust filters first.');
+      return;
+    }
+
+    const header = [
+      'Member ID',
+      'Name',
+      'Email',
+      'Client',
+      'Participant date',
+      'Has session',
+      'First session date',
+      'Last session date',
+      'Days since last session',
+      'Days without session',
+      'Bucket',
+      'Coaches',
+      'Channels'
+    ];
+
+    const lines: string[] = [];
+    lines.push(header.map(escapeCsv).join(','));
+
+    for (const p of filteredParticipants) {
+      const row = [
+        p.memberId,
+        p.memberName ?? '',
+        p.memberEmail ?? '',
+        p.client ?? '',
+        p.participantAt ? fromUnixToDateInput(p.participantAt) : '',
+        p.hasSession ? 'Yes' : 'No',
+        formatUnixDate(p.firstSessionAt),
+        formatUnixDate(p.lastSessionAt),
+        p.daysSinceLastSession != null ? p.daysSinceLastSession.toFixed(1) : '',
+        p.daysWithoutSession != null ? p.daysWithoutSession.toFixed(1) : '',
+        bucketLabel(p.buckets),
+        p.coachNames.join('; '),
+        p.channelsUsed.join('; ')
+      ].map((v) => escapeCsv(String(v)));
+
+      lines.push(row.join(','));
+    }
+
+    const csvContent = lines.join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'enrolled-participants-report.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function buildDerivedFilters(source: NewParticipantsReport | null) {
     if (!source) return;
 
     const coachMap = new Map<string, string>();
@@ -103,8 +189,8 @@
         }
       });
 
-      if (p.client != null) {
-        clientSet.add(String(p.client));
+      if (p.client) {
+        clientSet.add(p.client);
       }
     }
 
@@ -112,79 +198,57 @@
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    uniqueClients = Array.from(clientSet).sort();
+    uniqueClients = Array.from(clientSet).sort((a, b) => a.localeCompare(b));
   }
 
-  function applyFiltersAndMetrics() {
+  function applyFilters() {
     if (!report) {
       filteredParticipants = [];
-      countNoSession_0 = countNoSession_1 = countNoSession_2 = countNoSession_3 = 0;
+      countGt14To21 = 0;
+      countGt21To28 = 0;
+      countGt28 = 0;
       return;
     }
 
-    let rows = report.participants;
+    let subset = report.participants;
 
     // Coach filter
     if (selectedCoachId) {
-      rows = rows.filter((p) => p.coachIds.includes(selectedCoachId));
+      subset = subset.filter((p) => p.coachIds.includes(selectedCoachId));
     }
 
     // Client filter
     if (selectedClient) {
-      rows = rows.filter((p) => p.client === selectedClient);
+      subset = subset.filter((p) => p.client === selectedClient);
     }
 
-    // Channel filter – participants must have at least one selected channel to be included
-    // when a proper subset of channels is selected.
-    const activeChannels = allChannels.filter((ch) => selectedChannels[ch]);
-    const activeSet = new Set(activeChannels);
-    if (activeSet.size > 0 && activeSet.size < allChannels.length) {
-      rows = rows.filter((p) =>
-        p.channelsUsed.length === 0
-          ? false // if you narrow channels, drop participants with no sessions
-          : p.channelsUsed.some((ch) => activeSet.has(ch))
+    // Participant date range
+    if (rangeStart) {
+      const startTs = Date.parse(rangeStart) / 1000;
+      subset = subset.filter(
+        (p) => p.participantAt != null && p.participantAt >= startTs
       );
     }
 
-    // Participant Date filter (registration date)
-    if (rows.length > 0) {
-      let minMs = Math.min(...rows.map((p) => p.registrationAt * 1000));
-      let maxMs = Math.max(...rows.map((p) => p.registrationAt * 1000));
-
-      if (rangeStart) {
-        const d = new Date(rangeStart);
-        if (!Number.isNaN(d.getTime())) {
-          minMs = d.getTime();
-        }
-      }
-
-      if (rangeEnd) {
-        const d = new Date(rangeEnd);
-        if (!Number.isNaN(d.getTime())) {
-          maxMs = d.getTime() + 24 * 60 * 60 * 1000 - 1; // inclusive end-of-day
-        }
-      }
-
-      rows = rows.filter((p) => {
-        const ms = p.registrationAt * 1000;
-        return ms >= minMs && ms <= maxMs;
-      });
+    if (rangeEnd) {
+      const endTs = Date.parse(rangeEnd) / 1000;
+      const nextDay = endTs + 24 * 60 * 60; // inclusive end-of-day
+      subset = subset.filter(
+        (p) => p.participantAt != null && p.participantAt < nextDay
+      );
     }
 
-    filteredParticipants = rows;
+    filteredParticipants = subset;
 
-    const noSessionRows = filteredParticipants.filter((p) => !p.hasSession);
+    // Recompute bucket counts for filtered subset (additive / exclusive)
+    countGt14To21 = subset.filter((p) => p.buckets.gt_14_to_21).length;
+    countGt21To28 = subset.filter((p) => p.buckets.gt_21_to_28).length;
+    countGt28 = subset.filter((p) => p.buckets.gt_28).length;
+  }
 
-    countNoSession_0 = noSessionRows.length;
-    countNoSession_1 = noSessionRows.filter(
-      (p) => p.daysSinceRegistration > 14
-    ).length;
-    countNoSession_2 = noSessionRows.filter(
-      (p) => p.daysSinceRegistration > 28
-    ).length;
-    countNoSession_3 = noSessionRows.filter(
-      (p) => p.daysSinceRegistration > 56
-    ).length;
+  // Re-run filters whenever report or filter state changes
+  $: if (report) {
+    applyFilters();
   }
 
   async function loadReport() {
@@ -192,21 +256,37 @@
     error = null;
 
     try {
-      const parsed = Number(selectedLookbackDays || '28');
+      const parsed = Number(selectedLookbackDays || '0');
       if (Number.isNaN(parsed) || parsed <= 0) {
-        throw new Error('Please enter a positive lookback window in days (e.g., 28, 60, 90).');
+        throw new Error(
+          'Please enter a positive lookback window in days (e.g., 60, 90, 180).'
+        );
       }
 
       let requested = parsed;
       if (requested > 365) requested = 365;
       selectedLookbackDays = String(requested);
 
-      // Reuse cached data if we already loaded a larger/equal window
+      // Reuse cache if we already loaded a superset window
       if (cachedReport && lastLoadedLookbackDays !== null && requested <= lastLoadedLookbackDays) {
         report = cachedReport;
-        ensureRangeDefaults();
-        buildDerivedFiltersFrom(report);
-        applyFiltersAndMetrics();
+        buildDerivedFilters(report);
+        // Do NOT overwrite user-edited date range if they’ve set one
+        if (!rangeStart || !rangeEnd) {
+          if (report.participants.length > 0) {
+            const timestamps = report.participants
+              .map((p) => p.participantAt)
+              .filter((x): x is number => typeof x === 'number');
+
+            if (timestamps.length) {
+              const minTs = Math.min(...timestamps);
+              const maxTs = Math.max(...timestamps);
+              if (!rangeStart) rangeStart = fromUnixToDateInput(minTs);
+              if (!rangeEnd) rangeEnd = fromUnixToDateInput(maxTs);
+            }
+          }
+        }
+        applyFilters();
         return;
       }
 
@@ -222,14 +302,27 @@
       }
 
       const data: NewParticipantsReport = await res.json();
-
-      cachedReport = data;
-      lastLoadedLookbackDays = data.lookbackDays;
       report = data;
+      cachedReport = data;
+      lastLoadedLookbackDays = requested;
 
-      ensureRangeDefaults();
-      buildDerivedFiltersFrom(report);
-      applyFiltersAndMetrics();
+      buildDerivedFilters(report);
+
+      // Default participant range to full loaded set if user hasn't chosen yet
+      if (report.participants.length > 0 && (!rangeStart || !rangeEnd)) {
+        const timestamps = report.participants
+          .map((p) => p.participantAt)
+          .filter((x): x is number => typeof x === 'number');
+
+        if (timestamps.length) {
+          const minTs = Math.min(...timestamps);
+          const maxTs = Math.max(...timestamps);
+          rangeStart = fromUnixToDateInput(minTs);
+          rangeEnd = fromUnixToDateInput(maxTs);
+        }
+      }
+
+      applyFilters();
     } catch (e: any) {
       console.error(e);
       error = e?.message ?? String(e);
@@ -237,11 +330,18 @@
       loading = false;
     }
   }
+  // Sort filtered participants by daysWithoutSession
+  $: if (filteredParticipants) {
+  // Copy first to avoid mutating filteredParticipants in place
+  sortedParticipants = [...filteredParticipants].sort((a, b) => {
+    const aVal = a.daysWithoutSession ?? -Infinity;
+    const bVal = b.daysWithoutSession ?? -Infinity;
 
-  // Re-run filters when report or controls change
-  $: if (report) {
-    applyFiltersAndMetrics();
-  }
+    // Descending: highest daysWithoutSession first
+    return sortDescendingByDays ? bVal - aVal : aVal - bVal;
+  });
+}
+
 </script>
 
 <style>
@@ -287,23 +387,13 @@
     color: #444;
   }
 
-  select,
   input[type='number'],
+  select,
   input[type='date'] {
-    padding: 0.35rem 0.5rem;
+    padding: 0.3rem 0.45rem;
     border-radius: 0.25rem;
     border: 1px solid #ccc;
-    font-size: 0.9rem;
-  }
-
-  .channel-checkboxes {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .channel-checkboxes label {
-    font-weight: 400;
+    font-size: 0.85rem;
   }
 
   button.reload {
@@ -323,18 +413,35 @@
     cursor: default;
   }
 
+  button.secondary {
+    margin-top: 0.5rem;
+    align-self: flex-start;
+    padding: 0.4rem 0.9rem;
+    border-radius: 0.25rem;
+    border: 1px solid #555;
+    background: #fff;
+    color: #333;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+
+  button.secondary:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
   .metrics {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
   }
 
   .metric-card {
-    padding: 0.75rem 0.9rem;
+    padding: 0.75rem 1rem;
     border-radius: 0.5rem;
     border: 1px solid #ddd;
-    background: #fafafa;
+    background: #fdfdfd;
   }
 
   .metric-label {
@@ -344,8 +451,9 @@
   }
 
   .metric-value {
-    font-size: 1.2rem;
+    font-size: 1.3rem;
     font-weight: 600;
+    margin-bottom: 0.1rem;
   }
 
   .muted {
@@ -376,6 +484,10 @@
     background: #f3f3f3;
   }
 
+  tbody tr:nth-child(even) {
+    background: #fafafa;
+  }
+
   .pill {
     display: inline-block;
     padding: 0.1rem 0.35rem;
@@ -383,14 +495,14 @@
     background: #eee;
     font-size: 0.75rem;
     margin-right: 0.25rem;
-    margin-bottom: 0.1rem;
   }
 </style>
 
 <div class="page">
-  <h1>New Participants Report</h1>
+  <h1>Enrolled Participants Report</h1>
   <div class="subtitle">
-    New participants by registration date and whether they’ve had a coaching session.
+    Enrolled participants bucketed by days without a coaching session, filterable by coach, client,
+    and participant start date.
   </div>
 
   {#if error}
@@ -399,7 +511,7 @@
 
   <div class="filters">
     <div class="filter-group">
-      <label for="lookback">Registration lookback (days, max 365)</label>
+      <label for="lookback">Lookback window for data (days, max 365)</label>
       <input
         id="lookback"
         type="number"
@@ -417,7 +529,18 @@
         {/if}
       </button>
       <div class="muted">
-        This controls how far back we look for <em>Registration date</em>. Use 28 to match your current definition.
+        Data is cached during this session; increasing the window (up to 365) may trigger a new
+        fetch.
+      </div>
+    </div>
+
+    <div class="filter-group">
+      <label>Export</label>
+      <button class="secondary" on:click={exportCsv} disabled={!filteredParticipants.length}>
+        Export CSV (current filters)
+      </button>
+      <div class="muted">
+        Exports all enrolled participants that match the current filters.
       </div>
     </div>
 
@@ -429,76 +552,56 @@
           <option value={coach.id}>{coach.name} ({coach.id})</option>
         {/each}
       </select>
-      <div class="muted">
-        For participants with no sessions, no coach is shown.
-      </div>
     </div>
 
     <div class="filter-group">
-      <label for="client">Client</label>
+      <label for="client">Client (Employer)</label>
       <select id="client" bind:value={selectedClient}>
         <option value="">All clients</option>
-        {#each uniqueClients as c}
-          <option value={c}>{c}</option>
+        {#each uniqueClients as client}
+          <option value={client}>{client}</option>
         {/each}
       </select>
     </div>
 
     <div class="filter-group">
-      <label>Channels (based on sessions)</label>
-      <div class="channel-checkboxes">
-        {#each allChannels as ch}
-          <label>
-            <input
-              type="checkbox"
-              bind:checked={selectedChannels[ch]}
-            />
-            {ch}
-          </label>
-        {/each}
-      </div>
-      <div class="muted">
-        If you narrow channels, participants with no sessions are excluded.
-      </div>
-    </div>
-
-    <div class="filter-group">
-      <label>Participant Date range (Registration date)</label>
+      <label>Participant date range</label>
       <div>
         <input type="date" bind:value={rangeStart} />
         <input type="date" bind:value={rangeEnd} style="margin-left: 0.25rem;" />
       </div>
       <div class="muted">
-        Defaults to the full registration window; adjust to focus on specific cohorts.
+        Uses {PARTICIPANT_DATE_ATTR_LABEL} as the participant start date.
       </div>
     </div>
   </div>
 
-  {#if loading && !report}
-    <p>Loading new participants…</p>
-  {:else if report}
+  {#if report}
     <div class="metrics">
       <div class="metric-card">
-        <div class="metric-label">New participants with no session</div>
-        <div class="metric-value">{countNoSession_0}</div>
+        <div class="metric-label">Participants &gt; 14–21 days without a session</div>
+        <div class="metric-value">{countGt14To21}</div>
+        <div class="muted">Filtered view</div>
       </div>
+
       <div class="metric-card">
-        <div class="metric-label">No session &gt; 14 days</div>
-        <div class="metric-value">{countNoSession_1}</div>
+        <div class="metric-label">Participants 22–28 days without a session</div>
+        <div class="metric-value">{countGt21To28}</div>
+        <div class="muted">Filtered view</div>
       </div>
+
       <div class="metric-card">
-        <div class="metric-label">No session &gt; 28 days</div>
-        <div class="metric-value">{countNoSession_2}</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">No session &gt; 56 days (Unengaged)</div>
-        <div class="metric-value">{countNoSession_3}</div>
+        <div class="metric-label">Participants &gt; 28 days without a session (Unengaged)</div>
+        <div class="metric-value">{countGt28}</div>
+        <div class="muted">
+          Report-local definition; does not change global engagement status.
+        </div>
       </div>
     </div>
 
     <p class="muted">
-      Loaded {report.totalParticipants} participants (before filters, lookback = {report.lookbackDays} days).
-      Showing {filteredParticipants.length} after filters.
+      Loaded {report.totalParticipants} enrolled participants in the last {report.lookbackDays} days
+      (before filters). Showing {filteredParticipants.length} after filters.
     </p>
 
     <h2>Participants (filtered)</h2>
@@ -507,61 +610,54 @@
         <tr>
           <th>Participant</th>
           <th>Client</th>
-          <th>Registration date</th>
-          <th>Days since registration</th>
-          <th>Has session?</th>
+          <th>Participant date</th>
+          <th>Has session</th>
+          <th>First session</th>
           <th>Last session</th>
-          <th>Days since last session</th>
+          <th>Days without session</th>
+          <th>Bucket</th>
           <th>Coaches</th>
-          <th>Channels used</th>
+          <th>Channels</th>
         </tr>
       </thead>
       <tbody>
-        {#each filteredParticipants.slice(0, 500) as p}
+        {#each sortedParticipants.slice(0, 500) as p}
           <tr>
             <td>
               {p.memberName || '(no name)'}
               <div class="muted">{p.memberEmail}</div>
             </td>
             <td>{p.client || '—'}</td>
-            <td>{new Date(p.registrationAt * 1000).toLocaleDateString()}</td>
-            <td>{p.daysSinceRegistration.toFixed(1)}</td>
+            <td>{formatUnixDate(p.participantAt)}</td>
             <td>{p.hasSession ? 'Yes' : 'No'}</td>
+            <td>{formatUnixDate(p.firstSessionAt)}</td>
+            <td>{formatUnixDate(p.lastSessionAt)}</td>
             <td>
-              {#if p.lastSessionAt}
-                {new Date(p.lastSessionAt * 1000).toLocaleDateString()}
+              {#if p.daysWithoutSession != null}
+                {p.daysWithoutSession.toFixed(1)}
               {:else}
                 —
               {/if}
             </td>
+            <td>{bucketLabel(p.buckets)}</td>
             <td>
-              {#if p.daysSinceLastSession != null}
-                {p.daysSinceLastSession.toFixed(1)}
+              {#if p.coachNames.length}
+                {p.coachNames.join(', ')}
               {:else}
-                —
-              {/if}
-            </td>
-            <td>
-              {#if p.coachNames.length === 0}
                 <span class="muted">Unassigned</span>
-              {:else}
-                {#each p.coachNames as name}
-                  <span class="pill">{name}</span>
-                {/each}
               {/if}
             </td>
             <td>
-              {#if p.channelsUsed.length === 0}
-                <span class="muted">None yet</span>
-              {:else}
-                {#each p.channelsUsed as ch}
-                  <span class="pill">{ch}</span>
-                {/each}
-              {/if}
+              {#each p.channelsUsed as ch}
+                <span class="pill">{ch}</span>
+              {/each}
             </td>
           </tr>
         {/each}
       </tbody>
     </table>
+    <div class="muted">
+      Showing up to 500 participants. Use filters to narrow the view if more are loaded.
+    </div>
   {/if}
 </div>

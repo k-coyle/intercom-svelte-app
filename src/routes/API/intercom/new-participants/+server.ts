@@ -11,52 +11,22 @@ const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
-// Custom attribute keys – adjust if your keys differ in Intercom
+// Custom attribute keys – adjust once "Enrolled Date" is live.
 const REGISTRATION_ATTR_KEY = 'Registration Date';
+// In production, you may want to switch this to 'Enrolled Date'.
+const PARTICIPANT_DATE_ATTR_KEY = REGISTRATION_ATTR_KEY;
 const CLIENT_ATTR_KEY = 'Employer';
 const CHANNEL_ATTR_KEY = 'Channel';
 
-// Channels that count as "coaching sessions"
+// Channels that count as "coaching sessions" for this report
 const SESSION_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
 
-interface SessionRow {
-  memberId: string;
-  coachId: string | null;
-  channel: SessionChannel;
-  time: number; // unix seconds
-}
+const DEFAULT_LOOKBACK_DAYS = 365;
 
-interface ParticipantRow {
-  memberId: string;
-  memberName: string | null;
-  memberEmail: string | null;
-  client: string | null;
-  registrationAt: number;
-  daysSinceRegistration: number;
-  hasSession: boolean;
-  lastSessionAt: number | null;
-  daysSinceLastSession: number | null;
-  coachIds: string[];
-  coachNames: string[];
-  channelsUsed: SessionChannel[];
-}
-
-interface NewParticipantsReport {
-  lookbackDays: number;
-  generatedAt: string;
-  totalParticipants: number;
-  participants: ParticipantRow[];
-}
-
-interface AdminInfo {
-  id: string;
-  name: string | null;
-  email: string | null;
-}
-
-// ---------- Intercom helpers ----------
-
+/**
+ * Basic Intercom API helper.
+ */
 async function intercomRequest(path: string, init: RequestInit = {}): Promise<any> {
   if (!INTERCOM_ACCESS_TOKEN) {
     throw new Error('INTERCOM_ACCESS_TOKEN is not set');
@@ -82,11 +52,10 @@ async function intercomRequest(path: string, init: RequestInit = {}): Promise<an
 }
 
 /**
- * Search contacts whose Registration date is within the lookback window.
- * We query by registration attribute; if the field path gives you 400s,
- * you may need to tweak `field` per Intercom docs.
+ * Fetch all "enrolled" contacts whose participant date (Registration / Enrolled Date)
+ * is within the lookback window.
  */
-async function searchContactsRegisteredSince(sinceUnix: number): Promise<any[]> {
+async function searchEnrolledContactsSince(sinceUnix: number): Promise<any[]> {
   const allContacts: any[] = [];
   let startingAfter: string | undefined = undefined;
   let page = 1;
@@ -96,13 +65,8 @@ async function searchContactsRegisteredSince(sinceUnix: number): Promise<any[]> 
       query: {
         operator: 'AND',
         value: [
-          {
-            // NOTE: this assumes Intercom exposes the custom attribute as this field.
-            // If it 400s, check your exact registration field name in Intercom search docs.
-            field: `custom_attributes.${REGISTRATION_ATTR_KEY}`,
-            operator: '>',
-            value: sinceUnix
-          }
+          {field: 'role', operator: '=', value: 'user'},
+          {field:  "custom_attributes.Registration Date", operator: '>', value: sinceUnix }
         ]
       },
       pagination: {
@@ -123,7 +87,7 @@ async function searchContactsRegisteredSince(sinceUnix: number): Promise<any[]> 
     const totalCount = data.total_count ?? data.total ?? 'unknown';
 
     console.log(
-      `Contacts page ${page}: got ${contacts.length} (total_count=${totalCount}).`
+      `Contacts page ${page}: got ${contacts.length} contacts (total_count=${totalCount}).`
     );
 
     allContacts.push(...contacts);
@@ -143,7 +107,7 @@ async function searchContactsRegisteredSince(sinceUnix: number): Promise<any[]> 
  * Fetch ALL closed conversations updated since `sinceUnix`,
  * following pagination using pages.next.starting_after.
  */
-async function searchClosedConversationsSince(sinceUnix: number): Promise<any[]> {
+async function searchClosedConversationsSince(sinceUnix: number, contactIds?: string[]): Promise<any[]> {
   const allConversations: any[] = [];
   let startingAfter: string | undefined = undefined;
   let page = 1;
@@ -154,7 +118,8 @@ async function searchClosedConversationsSince(sinceUnix: number): Promise<any[]>
         operator: 'AND',
         value: [
           { field: 'state', operator: '=', value: 'closed' },
-          { field: 'updated_at', operator: '>', value: sinceUnix }
+          { field: 'updated_at', operator: '>', value: sinceUnix },
+          { field: 'contact_ids', operator: 'IN', value: contactIds }
         ]
       },
       pagination: {
@@ -171,11 +136,11 @@ async function searchClosedConversationsSince(sinceUnix: number): Promise<any[]>
       body: JSON.stringify(body)
     });
 
-    const conversations = data.conversations ?? [];
+    const conversations = data.conversations ?? data.data ?? [];
     const totalCount = data.total_count ?? data.total ?? 'unknown';
 
     console.log(
-      `Conversations page ${page}: got ${conversations.length} (total_count=${totalCount}).`
+      `Conversations page ${page}: got ${conversations.length} conversations (total_count=${totalCount}).`
     );
 
     allConversations.push(...conversations);
@@ -191,137 +156,160 @@ async function searchClosedConversationsSince(sinceUnix: number): Promise<any[]>
   return allConversations;
 }
 
-/**
- * Fetch all admins (coaches) so we can map admin_assignee_id -> name.
- */
-async function fetchAdmins(): Promise<Map<string, AdminInfo>> {
-  const data = await intercomRequest('/admins', { method: 'GET' });
-  const admins = data.admins ?? data.data ?? [];
-  const map = new Map<string, AdminInfo>();
+async function fetchConversationsForContacts(
+  sinceUnix: number,
+  contactIds: string[]
+) {
+  const chunkSize = 15;
+  const all: any[] = [];
 
-  for (const a of admins) {
-    const id = String(a.id);
-    map.set(id, {
-      id,
-      name: a.name ?? null,
-      email: a.email ?? null
-    });
+  for (let i = 0; i < contactIds.length; i += chunkSize) {
+    const chunk = contactIds.slice(i, i + chunkSize);
+    const convs = await searchClosedConversationsSince(sinceUnix, chunk);
+    all.push(...convs);
+  }
+
+  return all;
+}
+
+
+/**
+ * Fetch all admins and build an ID->name map so we can label coaches.
+ */
+async function fetchAdminMap(): Promise<Map<string, { name: string; email: string | null }>> {
+  const map = new Map<string, { name: string; email: string | null }>();
+
+  try {
+    const data = await intercomRequest('/admins');
+    const admins = data.admins ?? data.data ?? [];
+    for (const a of admins) {
+      const id = a.id != null ? String(a.id) : '';
+      if (!id) continue;
+      const name = (a.name as string) ?? id;
+      const email = (a.email as string) ?? null;
+      map.set(id, { name, email });
+    }
+  } catch (err: any) {
+    console.warn('Warning: unable to fetch admins map:', err?.message ?? err);
   }
 
   return map;
 }
 
-// ---------- New Participants logic ----------
+interface SessionRow {
+  memberId: string;
+  coachId: string | null;
+  channel: SessionChannel;
+  time: number; // unix seconds
+}
+
+interface ParticipantBuckets {
+  gt_14_to_21: boolean;
+  gt_21_to_28: boolean;
+  gt_28: boolean; // Unengaged for this report
+}
+
+interface ParticipantRow {
+  memberId: string;
+  memberName: string | null;
+  memberEmail: string | null;
+  client: string | null;
+  participantAt: number | null; // Registration / Enrolled Date (unix seconds)
+  daysSinceParticipant: number | null;
+
+  hasSession: boolean;
+  firstSessionAt: number | null;
+  lastSessionAt: number | null;
+  daysSinceLastSession: number | null;
+
+  coachIds: string[];
+  coachNames: string[];
+  channelsUsed: SessionChannel[];
+
+  // Metric used for bucket classification: days since last session,
+  // or since participant date if no session yet.
+  daysWithoutSession: number | null;
+  buckets: ParticipantBuckets;
+}
+
+interface NewParticipantsSummary {
+  gt_14_to_21: number;
+  gt_21_to_28: number;
+  gt_28: number;
+}
+
+interface NewParticipantsReport {
+  generatedAt: string;
+  lookbackDays: number;
+  totalParticipants: number;
+  summary: NewParticipantsSummary;
+  participants: ParticipantRow[];
+}
 
 /**
- * Build the new-participants report:
- * - Find contacts whose Registration date is within lookbackDays
- * - Look at coaching sessions (Phone/Video/Email/Chat) since the window start
- * - For each participant, compute whether they have any sessions
- *   AFTER registration, days since registration, etc.
+ * Classify a participant into additive buckets based on daysWithoutSession.
+ *
+ * Rules (exclusive buckets):
+ * - daysWithoutSession > 28        => gt_28 = true   (Unengaged)
+ * - 21 < daysWithoutSession <= 28  => gt_21_to_28 = true
+ * - 14 < daysWithoutSession <= 21  => gt_14_to_21 = true
+ * - Otherwise                      => all false
  */
-async function runNewParticipantsReport(lookbackDays: number): Promise<NewParticipantsReport> {
+function classifyBuckets(daysWithoutSession: number | null): ParticipantBuckets {
+  if (daysWithoutSession == null) {
+    return { gt_14_to_21: false, gt_21_to_28: false, gt_28: false };
+  }
+
+  if (daysWithoutSession > 28) {
+    return { gt_14_to_21: false, gt_21_to_28: false, gt_28: true };
+  }
+
+  if (daysWithoutSession > 21) {
+    return { gt_14_to_21: false, gt_21_to_28: true, gt_28: false };
+  }
+
+  if (daysWithoutSession > 14) {
+    return { gt_14_to_21: true, gt_21_to_28: false, gt_28: false };
+  }
+
+  return { gt_14_to_21: false, gt_21_to_28: false, gt_28: false };
+}
+
+/**
+ * Build the report: enrolled participants + buckets.
+ */
+async function buildNewParticipantsReport(lookbackDays: number): Promise<NewParticipantsReport> {
   const nowUnix = Math.floor(Date.now() / 1000);
   const sinceUnix = nowUnix - lookbackDays * SECONDS_PER_DAY;
 
   console.log(
-    `New participants report: lookbackDays=${lookbackDays}, sinceUnix=${sinceUnix} (${new Date(
-      sinceUnix * 1000
-    ).toISOString()})`
+    `New-participants report: lookbackDays=${lookbackDays}, sinceUnix=${sinceUnix}`
   );
 
-  // 1) Contacts with Registration date in this window
-  const contacts = await searchContactsRegisteredSince(sinceUnix);
+  // 1) Fetch enrolled contacts
+  const contacts = await searchEnrolledContactsSince(sinceUnix);
 
-  const participantsMap = new Map<string, ParticipantRow>();
-
-  for (const contact of contacts) {
-    const attrs = contact.custom_attributes || {};
-    const regRaw = attrs[REGISTRATION_ATTR_KEY];
-
-    let registrationAt: number | null = null;
-    if (typeof regRaw === 'number') {
-      registrationAt = regRaw;
-    } else if (typeof regRaw === 'string') {
-      const parsed = Date.parse(regRaw);
-      if (!Number.isNaN(parsed)) {
-        registrationAt = Math.floor(parsed / 1000);
-      }
-    }
-
-    if (!registrationAt) {
-      // no usable registration date, skip – this report is registration-driven
-      continue;
-    }
-
-    if (registrationAt < sinceUnix) {
-      // old registration outside window – skip
-      continue;
-    }
-
-    const memberId = String(contact.id);
-    const memberName = contact.name ?? null;
-    const memberEmail = contact.email ?? null;
-    const client = (attrs[CLIENT_ATTR_KEY] as string) ?? null;
-
-    const daysSinceRegistration = (nowUnix - registrationAt) / SECONDS_PER_DAY;
-
-    participantsMap.set(memberId, {
-      memberId,
-      memberName,
-      memberEmail,
-      client,
-      registrationAt,
-      daysSinceRegistration,
-      hasSession: false,
-      lastSessionAt: null,
-      daysSinceLastSession: null,
-      coachIds: [],
-      coachNames: [],
-      channelsUsed: []
-    });
-  }
-
-  console.log(
-    `Participants with registration in window: ${participantsMap.size}`
+  // 2) Fetch relevant closed conversations in the same window
+  const contactIds = Array.from(
+    new Set(
+      contacts
+        .map((c: any) => (c.id != null ? String(c.id) : ''))
+        .filter((id) => id.length > 0)
+    )
   );
+  const conversations = await fetchConversationsForContacts(sinceUnix, contactIds);
 
-  if (participantsMap.size === 0) {
-    return {
-      lookbackDays,
-      generatedAt: new Date(nowUnix * 1000).toISOString(),
-      totalParticipants: 0,
-      participants: []
-    };
-  }
-
-  const participantIds = new Set(participantsMap.keys());
-
-  // 2) Fetch all closed conversations in that same window
-  const conversations = await searchClosedConversationsSince(sinceUnix);
-
-  // Build session rows keyed by memberId (only for participants)
+  // 3) Build session rows per contact
   const sessionsByMember = new Map<string, SessionRow[]>();
 
   for (const conv of conversations) {
     try {
       const attrs = conv.custom_attributes || {};
-      const channelValue = attrs[CHANNEL_ATTR_KEY] as string | undefined;
-      if (!channelValue) continue;
+      const channelValue = attrs[CHANNEL_ATTR_KEY];
 
-      if (!SESSION_CHANNELS.includes(channelValue as SessionChannel)) {
-        continue; // only Phone/Video/Email/Chat
+      if (!SESSION_CHANNELS.includes(channelValue)) {
+        continue;
       }
-
-      const channel = channelValue as SessionChannel;
-
-      const contactsList = conv.contacts?.contacts || [];
-      if (!contactsList.length) continue;
-
-      const memberId = String(contactsList[0].id);
-
-      // Ignore sessions for contacts that are NOT in our participants set
-      if (!participantIds.has(memberId)) continue;
 
       const stats = conv.statistics || {};
       const sessionTime =
@@ -332,111 +320,200 @@ async function runNewParticipantsReport(lookbackDays: number): Promise<NewPartic
 
       if (!sessionTime) continue;
 
-      const coachId =
-        conv.admin_assignee_id != null ? String(conv.admin_assignee_id) : null;
+      const contactsList = conv.contacts?.contacts || [];
+      if (!contactsList.length) continue;
 
-      const existing = sessionsByMember.get(memberId) ?? [];
-      existing.push({
-        memberId,
-        coachId,
-        channel,
-        time: sessionTime
-      });
-      sessionsByMember.set(memberId, existing);
+      const teammates = conv.teammates || [];
+      const adminAssigneeId =
+        conv.admin_assignee_id != null ? String(conv.admin_assignee_id) : null;
+      const teammateId =
+        teammates.length > 0 && teammates[0]?.id != null
+          ? String(teammates[0].id)
+          : null;
+
+      const coachId = adminAssigneeId || teammateId || null;
+
+      for (const c of contactsList) {
+        if (!c?.id) continue;
+        const memberId = String(c.id);
+
+        const row: SessionRow = {
+          memberId,
+          coachId,
+          channel: channelValue as SessionChannel,
+          time: sessionTime
+        };
+
+        const arr = sessionsByMember.get(memberId);
+        if (arr) {
+          arr.push(row);
+        } else {
+          sessionsByMember.set(memberId, [row]);
+        }
+      }
     } catch (err: any) {
       console.error(`Error processing conversation ${conv.id}:`, err?.message ?? err);
     }
   }
 
-  console.log(
-    `Participants with at least one conversation in window: ${sessionsByMember.size}`
-  );
+  // 4) Build admin map so we can label coaches
+  const adminMap = await fetchAdminMap();
 
-  // 3) Fetch admins (for coach names)
-  const adminMap = await fetchAdmins();
+  // 5) Build participant rows
+  const participants: ParticipantRow[] = [];
 
-  // 4) Fill in session information per participant
-  for (const [memberId, row] of participantsMap.entries()) {
-    const memberSessions = sessionsByMember.get(memberId) ?? [];
+  for (const contact of contacts) {
+    try {
+      const memberId: string = String(contact.id);
+      const custom = contact.custom_attributes || {};
 
-    // Filter sessions to those AFTER registration
-    const relevantSessions = memberSessions.filter(
-      (s) => s.time >= row.registrationAt
-    );
+      const participantAtRaw = custom[PARTICIPANT_DATE_ATTR_KEY];
+      const participantAt =
+        typeof participantAtRaw === 'number' && participantAtRaw > 0
+          ? participantAtRaw
+          : null;
 
-    if (relevantSessions.length === 0) {
-      // No sessions after registration
-      continue;
+      if (!participantAt || participantAt < sinceUnix) {
+        continue;
+      }
+
+      const daysSinceParticipant =
+        participantAt != null ? (nowUnix - participantAt) / SECONDS_PER_DAY : null;
+
+      const client =
+        custom[CLIENT_ATTR_KEY] != null ? String(custom[CLIENT_ATTR_KEY]) : null;
+
+      const name =
+        (contact.name as string) ??
+        (contact.external_id as string) ??
+        null;
+
+      const email =
+        (contact.email as string) ??
+        (Array.isArray(contact.emails) && contact.emails.length
+          ? (contact.emails[0].value as string)
+          : null);
+
+      const sessions = sessionsByMember.get(memberId) || [];
+      const hasSession = sessions.length > 0;
+
+      let firstSessionAt: number | null = null;
+      let lastSessionAt: number | null = null;
+      let daysSinceLastSession: number | null = null;
+
+      const coachIdSet = new Set<string>();
+      const channelSet = new Set<SessionChannel>();
+
+      if (hasSession) {
+        for (const s of sessions) {
+          if (s.time != null) {
+            if (firstSessionAt == null || s.time < firstSessionAt) {
+              firstSessionAt = s.time;
+            }
+            if (lastSessionAt == null || s.time > lastSessionAt) {
+              lastSessionAt = s.time;
+            }
+          }
+          if (s.coachId) {
+            coachIdSet.add(s.coachId);
+          }
+          if (s.channel) {
+            channelSet.add(s.channel);
+          }
+        }
+
+        if (lastSessionAt != null) {
+          daysSinceLastSession = (nowUnix - lastSessionAt) / SECONDS_PER_DAY;
+        }
+      }
+
+      let daysWithoutSession: number | null = null;
+      if (hasSession && daysSinceLastSession != null) {
+        daysWithoutSession = daysSinceLastSession;
+      } else if (!hasSession && daysSinceParticipant != null) {
+        // If no sessions yet, measure from participant date
+        daysWithoutSession = daysSinceParticipant;
+      }
+
+      const buckets = classifyBuckets(daysWithoutSession);
+
+      const coachIds = Array.from(coachIdSet);
+      const coachNames = coachIds.map((id) => {
+        const admin = adminMap.get(id);
+        return admin?.name ?? id;
+      });
+
+      const channelsUsed = Array.from(channelSet);
+
+      const row: ParticipantRow = {
+        memberId,
+        memberName: name,
+        memberEmail: email,
+        client,
+        participantAt,
+        daysSinceParticipant,
+        hasSession,
+        firstSessionAt,
+        lastSessionAt,
+        daysSinceLastSession,
+        coachIds,
+        coachNames,
+        channelsUsed,
+        daysWithoutSession,
+        buckets
+      };
+
+      participants.push(row);
+    } catch (err: any) {
+      console.error('Error building participant row:', err?.message ?? err);
     }
-
-    row.hasSession = true;
-
-    let lastSessionAt = 0;
-    const coachIdSet = new Set<string>();
-    const channelSet = new Set<SessionChannel>();
-
-    for (const s of relevantSessions) {
-      if (s.time > lastSessionAt) lastSessionAt = s.time;
-      if (s.coachId) coachIdSet.add(s.coachId);
-      channelSet.add(s.channel);
-    }
-
-    row.lastSessionAt = lastSessionAt;
-    row.daysSinceLastSession = (nowUnix - lastSessionAt) / SECONDS_PER_DAY;
-
-    row.coachIds = Array.from(coachIdSet).sort();
-    row.coachNames = row.coachIds.map(
-      (id) => adminMap.get(id)?.name ?? id
-    );
-    row.channelsUsed = Array.from(channelSet).sort();
   }
 
-  const participants = Array.from(participantsMap.values());
+  // 6) Summary counts (global, unfiltered)
+  const summary: NewParticipantsSummary = {
+    gt_14_to_21: 0,
+    gt_21_to_28: 0,
+    gt_28: 0
+  };
 
-  return {
+  for (const p of participants) {
+    if (p.buckets.gt_14_to_21) summary.gt_14_to_21 += 1;
+    if (p.buckets.gt_21_to_28) summary.gt_21_to_28 += 1;
+    if (p.buckets.gt_28) summary.gt_28 += 1;
+  }
+
+  const report: NewParticipantsReport = {
+    generatedAt: new Date().toISOString(),
     lookbackDays,
-    generatedAt: new Date(nowUnix * 1000).toISOString(),
     totalParticipants: participants.length,
+    summary,
     participants
   };
+
+  return report;
 }
 
-// ---------- SvelteKit handler ----------
-
+/**
+ * SvelteKit POST handler.
+ * Body (optional): { "lookbackDays"?: number }
+ */
 export const POST: RequestHandler = async ({ request }) => {
   try {
-    let body: any = {};
+    let lookbackDays = DEFAULT_LOOKBACK_DAYS;
+
     try {
-      body = await request.json();
-    } catch {
-      body = {};
-    }
-
-    const raw = body.lookbackDays;
-    let lookbackDays: number;
-
-    if (raw === undefined || raw === null || raw === '') {
-      // Default to 28 days if not provided (matches your current definition)
-      lookbackDays = 28;
-    } else {
-      const parsed = Number(raw);
-      if (Number.isNaN(parsed) || parsed <= 0) {
-        return new Response(
-          JSON.stringify({
-            error: 'Invalid lookbackDays',
-            details: 'lookbackDays must be a positive number of days (1–365).'
-          }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } }
-        );
+      const raw = await request.text();
+      if (raw) {
+        const body = JSON.parse(raw);
+        if (typeof body.lookbackDays === 'number' && body.lookbackDays > 0) {
+          lookbackDays = Math.min(body.lookbackDays, DEFAULT_LOOKBACK_DAYS);
+        }
       }
-      lookbackDays = parsed;
+    } catch (err) {
+      console.warn('Warning: unable to parse request body for new-participants:', err);
     }
 
-    if (lookbackDays > 365) {
-      lookbackDays = 365; // hard cap
-    }
-
-    const report = await runNewParticipantsReport(lookbackDays);
+    const report = await buildNewParticipantsReport(lookbackDays);
 
     return new Response(JSON.stringify(report), {
       headers: { 'Content-Type': 'application/json' }
@@ -446,7 +523,7 @@ export const POST: RequestHandler = async ({ request }) => {
     return new Response(
       JSON.stringify({
         error: 'Intercom new-participants report failed',
-          details: e?.message ?? String(e)
+        details: e?.message ?? String(e)
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
