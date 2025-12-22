@@ -95,10 +95,10 @@ Show unique members with at least one coaching session in the lookback window, b
 
 Key buckets (per member):
 
-- `last_8_days` – last session ≤ 8 days ago
-- `days_9_to_30` – last session 9–30 days ago
-- `days_31_to_61` – last session 31–61 days ago
-- `over_61_days` – last session > 61 days ago
+- last session ≤ 7 days ago
+- last session 8–28 days ago
+- last session 29–56 days ago
+- last session > 56 days ago
 
 Filters:
 
@@ -129,9 +129,10 @@ Show session-level (not unique members) counts over the same time windows, filte
 Key metrics:
 
 - Total coaching sessions in:
-  - last 8 days
-  - last 28 days
-  - last 57 days
+  - last session ≤ 7 days ago
+  - last session 8–28 days ago
+  - last session 29–56 days ago
+  - last session > 56 days ago
   - arbitrary custom date range
 - Channel breakdowns (Phone, Video, Email, Chat)
 
