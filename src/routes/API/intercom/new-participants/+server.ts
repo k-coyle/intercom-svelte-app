@@ -92,7 +92,7 @@ async function searchEnrolledContactsSince(sinceUnix: number): Promise<any[]> {
         value: [
           { field: 'role', operator: '=', value: 'user' },
           {
-            field: `custom_attributes.${REGISTRATION_ATTR_KEY}`,
+            field: `custom_attributes.${PARTICIPANT_DATE_ATTR_KEY}`,
             operator: '>',
             value: sinceUnix
           }

@@ -62,16 +62,16 @@
     },
     {
       id: 'new-participants',
-      name: 'New Participants Report',
+      name: 'Enrolled Participants Report',
       path: '/intercom/new-participants',
       summary:
         'Focuses on members who recently became program participants (Enrolled Date) and how quickly they receive their first coaching session.',
       primaryAudience: 'Onboarding Teams, Program Managers, Clinical Leads',
       metrics: [
-        'New participants with no coaching session yet',
-        'New participants >14–21 days without a first coaching session',
-        'New participants 22–28 days without a first coaching session',
-        'New participants >28 days without a coaching session (treated as “Unengaged” for onboarding)'
+        'Enrolled participants with no coaching session yet',
+        'Enrolled participants >14–21 days without a first coaching session',
+        'Enrolled participants 22–28 days without a first coaching session',
+        'Enrolled participants >28 days without a coaching session (treated as “Unengaged” for onboarding)'
       ],
       filters: [
         'Assigned Coach',
@@ -80,7 +80,7 @@
         'Lookback window (server-side bound on Enrolled Date + conversations)'
       ],
       notes: [
-        '“New participant” in this report = contact whose Enrolled Date falls within the loaded lookback window.',
+        '“Enrolled participant” in this report = contact whose Enrolled Date falls within the loaded lookback window.',
         'Buckets are report-local and based on days since first/last session or since Enrolled Date if no session yet.'
       ]
     },
@@ -93,10 +93,10 @@
       primaryAudience: 'Finance, RevOps, Program Leadership',
       metrics: [
         'List of members who either:',
-        '  • Became new participants during the previous calendar month, OR',
+        '  • Became enrolled participants during the previous calendar month, OR',
         '  • Met Engaged Participant criteria for at least one day in that month',
         'For each member: User ID, Name, Email, Enrolled Date, Last Coaching Session, Employer',
-        'Counts of total billable members, new participants, engaged participants, and overlap (new + engaged)'
+        'Counts of total billable members, enrolled participants, engaged participants, and overlap (enrolled + engaged)'
       ],
       filters: [
         'Employer (Client) – affects on-page metrics, visible table, and CSV export'
