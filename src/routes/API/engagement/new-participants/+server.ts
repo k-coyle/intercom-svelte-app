@@ -1,4 +1,4 @@
-// src/routes/API/intercom/new-participants/+server.ts
+// src/routes/API/engagement/new-participants/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
 import {
   INTERCOM_ACCESS_TOKEN,
@@ -38,7 +38,7 @@ async function intercomRequest(
   attempt = 1
 ): Promise<any> {
   if (!INTERCOM_ACCESS_TOKEN) {
-    throw new Error('INTERCOM_ACCESS_TOKEN is not set');
+    throw new Error('ACCESS_TOKEN is not set');
   }
 
   const res = await fetch(`${INTERCOM_BASE_URL}${path}`, {
@@ -568,7 +568,7 @@ export const POST: RequestHandler = async ({ request }) => {
     console.error('Fatal error in new-participants report:', e?.message ?? e);
     return new Response(
       JSON.stringify({
-        error: 'Intercom new-participants report failed',
+        error: 'new-participants report failed',
         details: e?.message ?? String(e)
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }

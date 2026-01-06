@@ -1,4 +1,4 @@
-<!-- src/routes/intercom/sessions/+page.svelte -->
+<!-- src/routes/engagement/sessions/+page.svelte -->
 <script lang="ts">
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
 
@@ -269,7 +269,7 @@
         return;
       }
 
-      const res = await fetch('/API/intercom/caseload', {
+      const res = await fetch('/API/engagement/caseload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lookbackDays: requested })
@@ -474,12 +474,12 @@
 </style>
 
 <div class="page">
-  <h1>Intercom Coaching Sessions Report</h1>
+  <h1>Coaching Sessions Report</h1>
   <div class="subtitle">
     Total coaching sessions by time window, coach, client, and channel.
   </div>
   <div class="subtitle-details">
-    A “session” here is a closed Intercom conversation where the Channel attribute is
+    A “session” here is a closed conversation where the Channel attribute is
     Phone, Video Conference, Email, or Chat (matching the caseload backend).
   </div>
 
@@ -507,7 +507,7 @@
         {/if}
       </button>
       <div class="muted">
-        This controls how far back we load sessions from Intercom.
+        This controls how far back we load sessions from the database.
       </div>
     </div>
 

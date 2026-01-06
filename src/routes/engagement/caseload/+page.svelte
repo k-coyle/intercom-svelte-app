@@ -207,7 +207,7 @@
       }
 
       // Otherwise, fetch from backend with the requested window
-      const res = await fetch('/API/intercom/caseload', {
+      const res = await fetch('/API/engagement/caseload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lookbackDays: requested })
@@ -386,7 +386,7 @@
 </style>
 
 <div class="page">
-  <h1>Intercom Caseload Dashboard</h1>
+  <h1>Caseload Dashboard</h1>
   <div class="subtitle">
     Unique members by <strong>channel combination</strong> and <strong>time since last coaching session</strong>.
   </div>

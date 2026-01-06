@@ -1,4 +1,4 @@
-// src/routes/API/intercom/billing/+server.ts
+// src/routes/API/engagement/billing/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
 import {
   INTERCOM_ACCESS_TOKEN,

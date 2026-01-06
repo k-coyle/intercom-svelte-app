@@ -94,7 +94,7 @@
         return;
       }
 
-      const res = await fetch('/API/intercom/billing', {
+      const res = await fetch('/API/engagement/billing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ monthYearLabel: requestedMonth })
@@ -386,7 +386,7 @@
       {#if loading}
         Running billing report…
       {:else if report}
-        Reload from cache / Intercom
+        Reload from cache / Database
       {:else}
         Run billing report
       {/if}

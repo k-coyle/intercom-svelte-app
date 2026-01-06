@@ -1,4 +1,4 @@
-<!-- src/routes/intercom/new-participants/+page.svelte -->
+<!-- src/routes/engagement/new-participants/+page.svelte -->
 <script lang="ts">
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
 
@@ -290,7 +290,7 @@
         return;
       }
 
-      const res = await fetch('/API/intercom/new-participants', {
+      const res = await fetch('/API/engagement/new-participants', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lookbackDays: requested })

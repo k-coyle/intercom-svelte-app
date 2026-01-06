@@ -14,7 +14,7 @@
     {
       id: 'caseload',
       name: 'Caseload Report',
-      path: '/intercom/caseload',
+      path: '/engagement/caseload',
       summary:
         'Shows how many unique members a coach is actively working with, segmented by recency of their last coaching session and communication channel combination.',
       primaryAudience: 'Coaches, Clinical/Operations Leads, Program Managers',
@@ -33,13 +33,13 @@
       ],
       notes: [
         'Each member is counted once per row based on their most recent qualifying coaching session.',
-        'A “coaching session” is any closed Intercom conversation where Channel ∈ {Phone, Video Conference, Email, Chat}.'
+        'A “coaching session” is any closed conversation where Channel ∈ {Phone, Video Conference, Email, Chat}.'
       ]
     },
     {
       id: 'sessions',
       name: 'Sessions Report',
-      path: '/intercom/sessions',
+      path: '/engagement/sessions',
       summary:
         'Tracks the total number of coaching sessions over configurable time windows, rather than unique members.',
       primaryAudience: 'Coaches, Ops, Finance, Capacity Planning',
@@ -63,7 +63,7 @@
     {
       id: 'new-participants',
       name: 'Enrolled Participants Report',
-      path: '/intercom/new-participants',
+      path: '/engagement/new-participants',
       summary:
         'Focuses on members who recently became program participants (Enrolled Date) and how quickly they receive their first coaching session.',
       primaryAudience: 'Onboarding Teams, Program Managers, Clinical Leads',
@@ -87,7 +87,7 @@
     {
       id: 'billing',
       name: 'Billing Report',
-      path: '/intercom/billing',
+      path: '/engagement/billing',
       summary:
         'Identifies members who should be billable for a given calendar month, based on becoming a participant or meeting engagement criteria, and exposes them as an exportable table.',
       primaryAudience: 'Finance, RevOps, Program Leadership',
@@ -113,7 +113,7 @@
   const glossary = [
     {
       term: 'Coaching session',
-      def: 'A closed Intercom conversation where the custom Channel attribute is one of: Phone, Video Conference, Email, or Chat.'
+      def: 'A closed conversation where the custom Channel attribute is one of: Phone, Video Conference, Email, or Chat.'
     },
     {
       term: 'Channel',
@@ -141,7 +141,7 @@
     },
     {
       term: 'Assigned Coach',
-      def: 'The Intercom teammate associated with the conversation (or contact) who is responsible for that member’s coaching relationship.'
+      def: 'The coach associated with the conversation (or contact) who is responsible for that member’s coaching relationship.'
     },
     {
       term: 'Lookback window',
@@ -165,7 +165,7 @@
     {
       id: 'session-index-v2',
       name: 'Session Indexer v2',
-      path: 'POST /API/intercom/report/session-index',
+      path: 'POST /API/engagement/report/session-index',
       summary:
         'Scans qualifying conversations and updates Last Coaching Session, First Session Date, and Last Call for enrolled members.',
       schedule:
@@ -179,7 +179,7 @@
     {
       id: 'engagement-classifier-v2',
       name: 'Engagement Classifier v2',
-      path: 'POST /API/intercom/report/engagement',
+      path: 'POST /API/engagement/report/engagement',
       summary:
         'Reads Enrolled Date, First Session Date, and Last Coaching Session to compute Engagement Status and Engagement Status Date for enrolled members.',
       schedule:
@@ -195,7 +195,7 @@
     {
       id: 'referral-eligible-programs',
       name: 'Referral → Eligible Programs Sync',
-      path: 'POST /API/intercom/report/referral-sync',
+      path: 'POST /API/engagement/report/referral-sync',
       summary:
         'For members with Referral = "Counter Health", sets Eligible Programs = "Smart Access".',
       schedule:
@@ -208,7 +208,7 @@
     {
       id: 'export-members-csv',
       name: 'Member Export CSV',
-      path: 'POST /API/intercom/export-members-csv',
+      path: 'POST /API/engagement/export-members-csv',
       summary:
         'Exports a CSV of enrolled members and key attributes for ad-hoc analysis or downstream BI.',
       schedule:
@@ -225,7 +225,7 @@
   "perPage": 150
 }`,
       notes: [
-        'Filters (Referral, Employer, Enrolled Date window, Last Session Date window, Engagement Status) are pushed into Intercom search where possible to keep exports fast.',
+        'Filters (Referral, Employer, Enrolled Date window, Last Session Date window, Engagement Status) are pushed into a database search where possible to keep exports fast.',
         'CSV columns follow the external spec: employee_id, name_first, name_last, member_dob, group_description, last_coaching_session, program_status, status_date, eligible_programs, registration_code.'
       ]
     }
@@ -412,7 +412,7 @@
 <div class="page">
   <h1>Coaching Analytics Reports</h1>
   <p class="intro">
-    This home page documents the analytics reports built on top of Intercom data and provides
+    This home page documents the analytics reports built on top of the data and provides
     definitions for key terms used across dashboards. Use it as the single source of truth for how
     metrics are calculated and where to find them.
   </p>
@@ -422,7 +422,7 @@
     <div>
       <div class="section-title">Available Reports</div>
       <div class="section-subtitle">
-        Each report uses Intercom conversations and contact attributes, with standardized definitions
+        Each report uses conversations and contact attributes, with standardized definitions
         for coaching sessions, engagement buckets, and participant status.
       </div>
 
@@ -493,7 +493,7 @@
   <div class="api-section">
     <div class="section-title">Background Jobs & API Endpoints</div>
     <div class="section-subtitle">
-      These backend endpoints keep Intercom attributes in sync and support the reports above. They are
+      These backend endpoints keep data attributes in sync and support the reports above. They are
       typically triggered via cron/EventBridge or from the command line, not directly from the UI.
     </div>
 
