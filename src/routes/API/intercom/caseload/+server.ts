@@ -10,11 +10,12 @@ const INTERCOM_BASE_URL = INTERCOM_API_BASE || 'https://api.intercom.io';
 const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
+const MAX_RETRIES = 3;
 
 // Conversation attribute key for channel (matches your Intercom data attribute)
 const CHANNEL_ATTR_KEY = 'Channel';
 
-// Channels that count as "coaching sessions"
+// Channels that count as "coaching sessions" for this report
 const SESSION_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
 
@@ -76,7 +77,7 @@ interface CaseloadReport {
   totalMembers: number;
   summary: CaseloadSummary;
   members: CaseloadMemberRow[];
-  sessions: SessionDetailRow[]; // 👈 NEW
+  sessions: SessionDetailRow[];
 }
 
 interface AdminInfo {
@@ -87,7 +88,15 @@ interface AdminInfo {
 
 // ---------- Intercom helpers ----------
 
-async function intercomRequest(path: string, init: RequestInit = {}): Promise<any> {
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function intercomRequest(
+  path: string,
+  init: RequestInit = {},
+  attempt = 1
+): Promise<any> {
   if (!INTERCOM_ACCESS_TOKEN) {
     throw new Error('INTERCOM_ACCESS_TOKEN is not set');
   }
@@ -102,6 +111,20 @@ async function intercomRequest(path: string, init: RequestInit = {}): Promise<an
       ...(init.headers ?? {})
     }
   });
+
+  if (res.status === 429 && attempt < MAX_RETRIES) {
+    const retryAfterHeader = res.headers.get('Retry-After');
+    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+    const delaySeconds = Number.isFinite(retryAfterSeconds)
+      ? retryAfterSeconds
+      : 2 ** attempt; // 2s, 4s, ...
+
+    console.warn(
+      `Intercom 429 rate limit on ${path}, attempt ${attempt} — retrying after ${delaySeconds}s`
+    );
+    await sleep(delaySeconds * 1000);
+    return intercomRequest(path, init, attempt + 1);
+  }
 
   if (!res.ok) {
     const text = await res.text();
@@ -143,11 +166,11 @@ async function searchClosedConversationsSince(sinceUnix: number): Promise<any[]>
       body: JSON.stringify(body)
     });
 
-    const conversations = data.conversations ?? [];
+    const conversations = data.conversations ?? data.data ?? [];
     const totalCount = data.total_count ?? data.total ?? 'unknown';
 
     console.log(
-      `Conversations page ${page}: got ${conversations.length} (total_count=${totalCount}).`
+      `Caseload conversations page ${page}: got ${conversations.length} (total_count=${totalCount}).`
     );
 
     allConversations.push(...conversations);
@@ -161,7 +184,7 @@ async function searchClosedConversationsSince(sinceUnix: number): Promise<any[]>
     page += 1;
   }
 
-  console.log(`Total fetched conversations: ${allConversations.length}`);
+  console.log(`Caseload: total fetched conversations: ${allConversations.length}`);
   return allConversations;
 }
 
@@ -224,20 +247,26 @@ async function fetchAdmins(): Promise<Map<string, AdminInfo>> {
 
 /**
  * Compute the four time-bucket flags from days_since_last_session.
+ *
+ * Bucket definitions:
+ *  - bucket_1: last session <= 7 days ago
+ *  - bucket_2: 8–28 days ago
+ *  - bucket_3: 29–56 days ago
+ *  - bucket_4: > 56 days ago
  */
 function computeBuckets(daysSince: number): MemberBuckets {
   return {
     bucket_1: daysSince <= 7,
     bucket_2: daysSince > 7 && daysSince <= 28,
-    bucket_3: daysSince >28 && daysSince <= 56,
+    bucket_3: daysSince > 28 && daysSince <= 56,
     bucket_4: daysSince > 56
   };
 }
 
 /**
  * Build the caseload report:
- * - Session-level list (for sessions report)
- * - Aggregated per member (for caseload report)
+ * - Session-level list (for sessions report & UI)
+ * - Aggregated per member (for caseload view)
  */
 async function runCaseloadReport(lookbackDays: number): Promise<CaseloadReport> {
   const nowUnix = Math.floor(Date.now() / 1000);
@@ -274,7 +303,7 @@ async function runCaseloadReport(lookbackDays: number): Promise<CaseloadReport> 
       const memberId = String(contactsList[0].id);
 
       const stats = conv.statistics || {};
-      const sessionTime =
+      const sessionTime: number | undefined =
         stats.last_close_at ||
         stats.last_admin_reply_at ||
         conv.updated_at ||

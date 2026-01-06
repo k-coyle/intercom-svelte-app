@@ -14,11 +14,23 @@
     daysSince: number; // days since session at time of report generation
   }
 
+  interface MemberBuckets {
+    // Aligned with backend:
+    // bucket_1:  daysSince <= 7
+    // bucket_2:  7 < daysSince <= 28
+    // bucket_3:  28 < daysSince <= 56
+    // bucket_4:  daysSince > 56
+    bucket_1: boolean;
+    bucket_2: boolean;
+    bucket_3: boolean;
+    bucket_4: boolean;
+  }
+
   interface CaseloadSummary {
-    last_8_days: number;
-    last_30_days: number;
-    days_30_to_60: number;
-    over_60_days: number;
+    bucket_1: number;
+    bucket_2: number;
+    bucket_3: number;
+    bucket_4: number;
   }
 
   interface CaseloadMemberRow {
@@ -32,12 +44,7 @@
     channelCombo: string;
     lastSessionAt: number;
     daysSinceLastSession: number;
-    buckets: {
-      last_8_days: boolean;
-      last_30_days: boolean;
-      days_30_to_60: boolean;
-      over_60_days: boolean;
-    };
+    buckets: MemberBuckets;
   }
 
   interface CaseloadReport {
@@ -150,7 +157,6 @@
     rangeEnd = toDateInputValue(endDate);
   }
 
-
   function toDateInputValue(date: Date): string {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -167,9 +173,11 @@
 
     let sessions = report.sessions;
 
+    // Optional "effective" lookback filter on top of the raw report
     if (effectiveLookbackDays != null) {
       sessions = sessions.filter((s) => s.daysSince <= effectiveLookbackDays!);
     }
+
     // Coach filter
     if (selectedCoachId) {
       sessions = sessions.filter((s) => s.coachId === selectedCoachId);
@@ -190,7 +198,7 @@
 
     filteredSessions = sessions;
 
-    // Apply custom date range as a real filter (so table + buckets react)
+    // Apply custom date range as a real filter (so table + metrics react)
     let minMs = -Infinity;
     let maxMs = Infinity;
 
@@ -214,12 +222,20 @@
       return ms >= minMs && ms <= maxMs;
     });
 
-    // Now compute ALL metrics from visibleSessions
+    // Metrics from visibleSessions
     totalInCustomRange = visibleSessions.length;
 
+    // NOTE: These now match the global bucket logic:
+    //  - ≤7 days
+    //  - 8–28 days
+    //  - 29–56 days
     totalLast8Days = visibleSessions.filter((s) => s.daysSince <= 7).length;
-    totalLast30Days = visibleSessions.filter((s) => s.daysSince >= 8 && s.daysSince <= 30).length;
-    totalLast60Days = visibleSessions.filter((s) => s.daysSince >= 31 && s.daysSince <= 60).length;
+    totalLast30Days = visibleSessions.filter(
+      (s) => s.daysSince > 7 && s.daysSince <= 28
+    ).length;
+    totalLast60Days = visibleSessions.filter(
+      (s) => s.daysSince > 28 && s.daysSince <= 56
+    ).length;
   }
 
   /**
@@ -282,7 +298,6 @@
 
   // Recompute whenever report or any filter control changes
   $: if (report) {
-    // explicitly mark dependencies so Svelte tracks them
     report;
     selectedCoachId;
     selectedClient;
@@ -293,6 +308,7 @@
 
     applyFiltersAndMetrics();
   }
+
   // Keep the numeric lookback field in sync when the user adjusts the custom date range
   $: if (report && rangeStart && rangeEnd) {
     const start = new Date(rangeStart);
@@ -306,7 +322,6 @@
       }
     }
   }
-
 </script>
 
 <style>
@@ -325,6 +340,12 @@
   .subtitle {
     color: #666;
     font-size: 0.9rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .subtitle-details {
+    color: #888;
+    font-size: 0.8rem;
     margin-bottom: 1rem;
   }
 
@@ -457,6 +478,10 @@
   <div class="subtitle">
     Total coaching sessions by time window, coach, client, and channel.
   </div>
+  <div class="subtitle-details">
+    A “session” here is a closed Intercom conversation where the Channel attribute is
+    Phone, Video Conference, Email, or Chat (matching the caseload backend).
+  </div>
 
   {#if error}
     <div class="error">Error: {error}</div>
@@ -545,11 +570,11 @@
         <div class="metric-value">{totalLast8Days}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Sessions last 8-28 days</div>
+        <div class="metric-label">Sessions last 8–28 days</div>
         <div class="metric-value">{totalLast30Days}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Sessions last 29-56 days</div>
+        <div class="metric-label">Sessions last 29–56 days</div>
         <div class="metric-value">{totalLast60Days}</div>
       </div>
       <div class="metric-card">

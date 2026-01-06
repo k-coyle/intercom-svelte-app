@@ -13,7 +13,7 @@
     memberName: string | null;
     memberEmail: string | null;
     client: string | null;
-    participantAt: number | null; // Registration / Enrolled Date (unix seconds)
+    participantAt: number | null; // Enrolled Date (unix seconds)
     daysSinceParticipant: number | null;
 
     hasSession: boolean;
@@ -25,7 +25,7 @@
     coachNames: string[];
     channelsUsed: SessionChannel[];
 
-    // metric for buckets: days since last session, or since participant date if no sessions
+    // metric for buckets: days since last session, or since Enrolled Date if no sessions
     daysWithoutSession: number | null;
     buckets: ParticipantBuckets;
   }
@@ -49,7 +49,7 @@
     name: string;
   }
 
-  const PARTICIPANT_DATE_ATTR_LABEL = 'Registration Date'; // later: switch to "Enrolled Date"
+  const PARTICIPANT_DATE_ATTR_LABEL = 'Enrolled Date';
 
   // Raw report & cache
   let report: NewParticipantsReport | null = null;
@@ -64,7 +64,7 @@
   let selectedCoachId = '';
   let selectedClient = '';
 
-  // Participant date range filters (YYYY-MM-DD)
+  // Enrolled date range filters (YYYY-MM-DD)
   let rangeStart = '';
   let rangeEnd = '';
 
@@ -128,7 +128,7 @@
       'Name',
       'Email',
       'Client',
-      'Participant date',
+      'Enrolled date',
       'Has session',
       'First session date',
       'Last session date',
@@ -222,7 +222,7 @@
       subset = subset.filter((p) => p.client === selectedClient);
     }
 
-    // Participant date range
+    // Enrolled Date range
     if (rangeStart) {
       const startTs = Date.parse(rangeStart) / 1000;
       subset = subset.filter(
@@ -565,7 +565,7 @@
     </div>
 
     <div class="filter-group">
-      <label>Participant date range</label>
+      <label>Enrolled Date range</label>
       <div>
         <input type="date" bind:value={rangeStart} />
         <input type="date" bind:value={rangeEnd} style="margin-left: 0.25rem;" />
@@ -610,7 +610,7 @@
         <tr>
           <th>Participant</th>
           <th>Client</th>
-          <th>Participant date</th>
+          <th>Enrolled date</th>
           <th>Has session</th>
           <th>First session</th>
           <th>Last session</th>

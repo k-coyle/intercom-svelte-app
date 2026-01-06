@@ -44,9 +44,9 @@
         'Tracks the total number of coaching sessions over configurable time windows, rather than unique members.',
       primaryAudience: 'Coaches, Ops, Finance, Capacity Planning',
       metrics: [
-        'Total coaching sessions in the last <8 days',
-        'Total coaching sessions in the last <=28 days',
-        'Total coaching sessions in the last <=56 days',
+        'Total coaching sessions in the last <=7 days',
+        'Total coaching sessions in the last 8–28 days',
+        'Total coaching sessions in the last 29–56 days',
         'Total coaching sessions in a configurable date range'
       ],
       filters: [
@@ -65,23 +65,23 @@
       name: 'New Participants Report',
       path: '/intercom/new-participants',
       summary:
-        'Focuses on members who recently became program participants and how quickly they receive their first coaching session.',
+        'Focuses on members who recently became program participants (Enrolled Date) and how quickly they receive their first coaching session.',
       primaryAudience: 'Onboarding Teams, Program Managers, Clinical Leads',
       metrics: [
         'New participants with no coaching session yet',
-        'New participants with no session >14 days after registration',
-        'New participants with no session >28 days after registration',
-        'New participants with no session >57 days after registration (considered “Unengaged”)'
+        'New participants >14–21 days without a first coaching session',
+        'New participants 22–28 days without a first coaching session',
+        'New participants >28 days without a coaching session (treated as “Unengaged” for onboarding)'
       ],
       filters: [
         'Assigned Coach',
         'Employer (Client)',
-        'Participant Date (Registration Date)',
-        'Optional channel filters (Phone, Video, Email, Chat)'
+        'Participant Date (Enrolled Date)',
+        'Lookback window (server-side bound on Enrolled Date + conversations)'
       ],
       notes: [
-        '“New participant” = contact with Registration Date within the last 28 days (custom attribute: Registration Date).',
-        'A participant who reaches >28 days without a coaching session can be considered Unengaged for onboarding.'
+        '“New participant” in this report = contact whose Enrolled Date falls within the loaded lookback window.',
+        'Buckets are report-local and based on days since first/last session or since Enrolled Date if no session yet.'
       ]
     },
     {
@@ -95,7 +95,7 @@
         'List of members who either:',
         '  • Became new participants during the previous calendar month, OR',
         '  • Met Engaged Participant criteria for at least one day in that month',
-        'For each member: User ID, Name, Email, Registration Date, Last Coaching Call, Employer',
+        'For each member: User ID, Name, Email, Enrolled Date, Last Coaching Session, Employer',
         'Counts of total billable members, new participants, engaged participants, and overlap (new + engaged)'
       ],
       filters: [
@@ -103,7 +103,7 @@
       ],
       notes: [
         'Billing window = previous calendar month (e.g., running in October produces a report for September).',
-        'Engaged Participant (for billing) = had a coaching session <=56 days ago for at least one day during the billing month.',
+        'Engaged Participant (for billing) = had a qualifying coaching session within the last 56 days relative to at least one day in the billing month.',
         'Table shows top 500 filtered rows; full result set is available via CSV export.',
         'Employer is taken from the custom attribute: Employer.'
       ]
@@ -120,8 +120,8 @@
       def: 'The conversation-level value stored in custom_attributes.Channel (e.g., Phone, Video Conference, Email, Chat). Used to distinguish between call-based vs. written interactions.'
     },
     {
-      term: 'Registration Date',
-      def: 'Custom contact attribute Registration Date. Represents the date a member became an official program participant.'
+      term: 'Enrolled Date',
+      def: 'Custom contact attribute Enrolled Date. Represents the date a member became an official program participant (accepted terms and conditions). Used as the participant start date across reports and engagement logic.'
     },
     {
       term: 'Employer (Client)',
@@ -129,7 +129,7 @@
     },
     {
       term: 'Engaged Participant',
-      def: 'A member with a last qualifying coaching (Phone or Video Conference) session ≤28 days ago. In some billing logic, we also treat “engaged” as having a session within the last 56 days relative to a day in the month.'
+      def: 'A member with a last qualifying coaching (Phone or Video Conference) session ≤28 days ago, or a newly-enrolled member (Enrolled Date ≤28 days ago) with no session yet. Some billing logic also treats “engaged” as having a session within the last 56 days relative to a day in the month.'
     },
     {
       term: 'At Risk Participant',
@@ -137,7 +137,7 @@
     },
     {
       term: 'Unengaged Participant',
-      def: 'A member whose last qualifying coaching (Phone or Video Conference) session was >56 days ago, or a new participant who has gone >28 days after Registration Date without any session (depending on the report).'
+      def: 'A member whose last qualifying coaching (Phone or Video Conference) session was >56 days ago, or (when engagement has never been set) a member whose first qualifying session occurs >28 days after Enrolled Date. Some reports also treat >28 days without any session after Enrolled Date as Unengaged for onboarding.'
     },
     {
       term: 'Assigned Coach',
@@ -146,6 +146,88 @@
     {
       term: 'Lookback window',
       def: 'A dynamic number of days prior to “today” used by some reports to bound which conversations or sessions are included (e.g., 365-day lookback for caseload data).'
+    }
+  ];
+
+  // ---- Background jobs / API endpoints ----
+
+  type ApiEndpoint = {
+    id: string;
+    name: string;
+    path: string;        // HTTP method + URL
+    summary: string;
+    schedule: string;    // how/when it’s typically run
+    payload?: string;    // example JSON body (optional)
+    notes?: string[];
+  };
+
+  const apiEndpoints: ApiEndpoint[] = [
+    {
+      id: 'session-index-v2',
+      name: 'Session Indexer v2',
+      path: 'POST /API/intercom/report/session-index',
+      summary:
+        'Scans qualifying conversations and updates Last Coaching Session, First Session Date, and Last Call for enrolled members.',
+      schedule:
+        'Daily via cron/EventBridge. Run once with a large lookback for backfill, then with smaller windows (e.g., 7–30 days).',
+      notes: [
+        'Qualifying coaching sessions: closed conversations where Channel ∈ {Phone, Video Conference} and Service Code ∈ {"Health Coaching 001", "Disease Management 002"}.',
+        'Also updates Last Call for any Phone conversations, regardless of close state.',
+        'Respects lookbackDays in the request body for incremental runs.'
+      ]
+    },
+    {
+      id: 'engagement-classifier-v2',
+      name: 'Engagement Classifier v2',
+      path: 'POST /API/intercom/report/engagement',
+      summary:
+        'Reads Enrolled Date, First Session Date, and Last Coaching Session to compute Engagement Status and Engagement Status Date for enrolled members.',
+      schedule:
+        'Daily, after Session Indexer v2 completes, using a similar lookback window.',
+      payload: `{"lookbackDays": 365, "dryRun": false}`,
+      notes: [
+        'Engaged: last qualifying session ≤28 days ago OR Enrolled Date ≤28 days ago with no session yet.',
+        'At Risk: last qualifying session 29–56 days ago.',
+        'Unengaged: last qualifying session >56 days ago OR (when Engagement Status has never been set) first qualifying session occurs >28 days after Enrolled Date.',
+        'Only considers qualifying sessions (Phone/Video + Service Code = 001 or 002).'
+      ]
+    },
+    {
+      id: 'referral-eligible-programs',
+      name: 'Referral → Eligible Programs Sync',
+      path: 'POST /API/intercom/report/referral-sync',
+      summary:
+        'For members with Referral = "Counter Health", sets Eligible Programs = "Smart Access".',
+      schedule:
+        'Run nightly or as needed after new members are loaded from upstream systems.',
+      notes: [
+        'Idempotent: safe to run repeatedly.',
+        'Can be extended to map additional Referral values to Eligible Programs.'
+      ]
+    },
+    {
+      id: 'export-members-csv',
+      name: 'Member Export CSV',
+      path: 'POST /API/intercom/export-members-csv',
+      summary:
+        'Exports a CSV of enrolled members and key attributes for ad-hoc analysis or downstream BI.',
+      schedule:
+        'On-demand from the command line (curl) or a one-off job. Not wired to the UI.',
+      payload: `{
+  "outputPath": "/path/to/engagement_report.csv",
+  "referral": "Counter Health",
+  "employer": "ACME Corp",
+  "enrolledStart": "2024-01-01",
+  "enrolledEnd": "2024-12-31",
+  "lastSessionStart": "2024-06-01",
+  "lastSessionEnd": "2024-06-30",
+  "engagementStatus": "Unengaged",
+  "perPage": 150
+}`,
+      notes: [
+        'Filters (Referral, Employer, Enrolled Date window, Last Session Date window, Engagement Status) are pushed into Intercom search where possible to keep exports fast.',
+        'CSV columns follow the external spec: employee_id, name_first, name_last, member_dob, group_description, last_coaching_session, program_status, status_date, eligible_programs, registration_code.'
+      ]
     }
   ];
 </script>
@@ -304,6 +386,22 @@
     margin-bottom: 0.6rem;
   }
 
+  .api-section {
+    margin-top: 2rem;
+  }
+
+  .code-block {
+    margin-top: 0.25rem;
+    padding: 0.4rem 0.5rem;
+    border-radius: 0.4rem;
+    border: 1px solid #ddd;
+    background: #f3f3f3;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+      'Courier New', monospace;
+    font-size: 0.75rem;
+    white-space: pre-wrap;
+  }
+
   @media (max-width: 900px) {
     .grid {
       grid-template-columns: minmax(0, 1fr);
@@ -389,5 +487,48 @@
         </div>
       {/each}
     </aside>
+  </div>
+
+  <!-- New: Background jobs / API endpoints -->
+  <div class="api-section">
+    <div class="section-title">Background Jobs & API Endpoints</div>
+    <div class="section-subtitle">
+      These backend endpoints keep Intercom attributes in sync and support the reports above. They are
+      typically triggered via cron/EventBridge or from the command line, not directly from the UI.
+    </div>
+
+    <div class="reports">
+      {#each apiEndpoints as e}
+        <div class="card" id={e.id}>
+          <div class="card-header">
+            <div class="card-title">{e.name}</div>
+            <div class="chip">{e.path}</div>
+          </div>
+
+          <div class="card-summary">
+            {e.summary}
+          </div>
+
+          <div class="label">Typical schedule</div>
+          <ul>
+            <li>{e.schedule}</li>
+          </ul>
+
+          {#if e.payload}
+            <div class="label">Example payload</div>
+            <pre class="code-block">{e.payload}</pre>
+          {/if}
+
+          {#if e.notes && e.notes.length}
+            <div class="label">Notes</div>
+            <ul>
+              {#each e.notes as note}
+                <li>{note}</li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      {/each}
+    </div>
   </div>
 </div>

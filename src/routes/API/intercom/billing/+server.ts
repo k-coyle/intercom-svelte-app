@@ -12,7 +12,9 @@ const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 // Attribute keys
-const REGISTRATION_ATTR_KEY = 'Registration Date';
+// NOTE: Billing now uses "Enrolled Date" as the participant start date.
+// The BillingRow.registrationAt field will now hold the Enrolled Date.
+const ENROLLED_ATTR_KEY = 'Enrolled Date';
 const EMPLOYER_ATTR_KEY = 'Employer';
 const CHANNEL_ATTR_KEY = 'Channel';
 
@@ -30,7 +32,8 @@ interface BillingRow {
   memberName: string | null;
   memberEmail: string | null;
   employer: string | null;
-  registrationAt: number | null; // unix seconds
+  // This is now the Enrolled Date (Unix seconds)
+  registrationAt: number | null;
   lastSessionAt: number | null; // unix seconds
   isNewParticipant: boolean;
   engagedDuringMonth: boolean;
@@ -93,7 +96,8 @@ async function searchClosedConversationsBetween(
           { field: 'state', operator: '=', value: 'closed' },
           { field: 'updated_at', operator: '>', value: startUnix },
           { field: 'updated_at', operator: '<=', value: endUnix },
-          { field: 'source.type', operator: 'NIN', value: ['email']} // This fiter is trying to remove email conversations!!! Might need to be adjusted later
+          // This filter is trying to remove email conversations (can be revisited later)
+          { field: 'source.type', operator: 'NIN', value: ['email'] }
         ]
       },
       pagination: {
@@ -131,7 +135,7 @@ async function searchClosedConversationsBetween(
 }
 
 /**
- * Search contacts whose Registration Date is within [monthStartUnix, monthEndUnix).
+ * Search contacts whose Enrolled Date is within [monthStartUnix, monthEndUnix).
  * NOTE: we use > monthStartUnix-1 and < monthEndUnix to avoid <=, which Intercom dislikes.
  */
 async function searchNewParticipantsInMonth(
@@ -148,12 +152,12 @@ async function searchNewParticipantsInMonth(
         operator: 'AND',
         value: [
           {
-            field: `custom_attributes.${REGISTRATION_ATTR_KEY}`,
+            field: `custom_attributes.${ENROLLED_ATTR_KEY}`,
             operator: '>',
             value: monthStartUnix - 1 // effectively >= monthStartUnix
           },
           {
-            field: `custom_attributes.${REGISTRATION_ATTR_KEY}`,
+            field: `custom_attributes.${ENROLLED_ATTR_KEY}`,
             operator: '<',
             value: monthEndUnix // effectively < monthEndUnix
           }
@@ -193,7 +197,7 @@ async function searchNewParticipantsInMonth(
     page += 1;
   }
 
-  console.log(`Billing: new participants in month: ${ids.size}`);
+  console.log(`Billing: new participants in month (by Enrolled Date): ${ids.size}`);
   return ids;
 }
 
@@ -346,7 +350,7 @@ function computeMonthWindowNY(monthYearLabel: string): {
 }
 
 /**
- * Build billing report for previous calendar month.
+ * Build billing report for given calendar month.
  */
 async function runBillingReport(monthYearLabel: string): Promise<BillingReport> {
   const startedAt = Date.now();
@@ -363,7 +367,7 @@ async function runBillingReport(monthYearLabel: string): Promise<BillingReport> 
   console.log(`Billing: START month=${monthYearLabel}`);
   console.log(`Billing: window start=${monthStartISO} end=${monthEndISO}`);
 
-  // Tail window for "<60 days ago at least one day during month"
+  // Tail window for "<57 days ago at least one day during month"
   const engagedTailWindowStartUnix = monthStartUnix - ENGAGED_TAIL_DAYS * SECONDS_PER_DAY;
   console.log(
     `Billing: tail window start=${new Date(engagedTailWindowStartUnix * 1000).toISOString()}`
@@ -446,7 +450,7 @@ async function runBillingReport(monthYearLabel: string): Promise<BillingReport> 
     `Billing: skips noChannel=${skippedNoChannel}, badChannel=${skippedBadChannel}, noContact=${skippedNoContact}, noSessionTime=${skippedNoSessionTime}, outOfWindow=${skippedOutOfWindow}`
   );
 
-  // 3) New participants in the month
+  // 3) New participants in the month (by Enrolled Date)
   console.log(`Billing: [3/5] Searching new participants (contacts)…`);
   const t3 = Date.now();
 
@@ -516,22 +520,28 @@ async function runBillingReport(monthYearLabel: string): Promise<BillingReport> 
 
     const attrs = contact.custom_attributes || {};
 
-    const regRaw = attrs[REGISTRATION_ATTR_KEY];
+    // NOTE: This is now the Enrolled Date value from Intercom.
+    const enrolledRaw = attrs[ENROLLED_ATTR_KEY];
     let registrationAt: number | null = null;
 
-    if (typeof regRaw === 'number') registrationAt = regRaw;
-    else if (typeof regRaw === 'string') {
-      const parsed = Date.parse(regRaw);
+    if (typeof enrolledRaw === 'number') registrationAt = enrolledRaw;
+    else if (typeof enrolledRaw === 'string') {
+      const parsed = Date.parse(enrolledRaw);
       if (!Number.isNaN(parsed)) registrationAt = Math.floor(parsed / 1000);
     }
 
     const isNewParticipant =
-      registrationAt !== null && registrationAt >= monthStartUnix && registrationAt < monthEndUnix;
+      registrationAt !== null &&
+      registrationAt >= monthStartUnix &&
+      registrationAt < monthEndUnix;
 
     const lastSessionAt = lastSessionByMember.get(memberId) ?? null;
 
+    const engagedLowerBound = monthStartUnix - ENGAGED_TAIL_DAYS * SECONDS_PER_DAY;
     const engagedDuringMonth =
-      lastSessionAt !== null && lastSessionAt >= engagedLowerBound && lastSessionAt < monthEndUnix;
+      lastSessionAt !== null &&
+      lastSessionAt >= engagedLowerBound &&
+      lastSessionAt < monthEndUnix;
 
     const employerRaw = attrs[EMPLOYER_ATTR_KEY];
     const employer =
@@ -581,7 +591,6 @@ async function runBillingReport(monthYearLabel: string): Promise<BillingReport> 
     rows
   };
 }
-
 
 // ---------- SvelteKit handler ----------
 

@@ -10,11 +10,10 @@ const INTERCOM_BASE_URL = INTERCOM_API_BASE || 'https://api.intercom.io';
 const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
+const MAX_RETRIES = 3;
 
-// Custom attribute keys – adjust once "Enrolled Date" is live.
-const REGISTRATION_ATTR_KEY = 'Registration Date';
-// In production, you may want to switch this to 'Enrolled Date'.
-const PARTICIPANT_DATE_ATTR_KEY = REGISTRATION_ATTR_KEY;
+// Custom attribute keys
+const PARTICIPANT_DATE_ATTR_KEY = 'Enrolled Date';
 const CLIENT_ATTR_KEY = 'Employer';
 const CHANNEL_ATTR_KEY = 'Channel';
 
@@ -24,10 +23,20 @@ type SessionChannel = (typeof SESSION_CHANNELS)[number];
 
 const DEFAULT_LOOKBACK_DAYS = 365;
 
+// ---------- Intercom helper with 429 retry ----------
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
- * Basic Intercom API helper.
+ * Basic Intercom API helper with simple retry on 429.
  */
-async function intercomRequest(path: string, init: RequestInit = {}): Promise<any> {
+async function intercomRequest(
+  path: string,
+  init: RequestInit = {},
+  attempt = 1
+): Promise<any> {
   if (!INTERCOM_ACCESS_TOKEN) {
     throw new Error('INTERCOM_ACCESS_TOKEN is not set');
   }
@@ -43,6 +52,20 @@ async function intercomRequest(path: string, init: RequestInit = {}): Promise<an
     }
   });
 
+  if (res.status === 429 && attempt < MAX_RETRIES) {
+    const retryAfterHeader = res.headers.get('Retry-After');
+    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+    const delaySeconds = Number.isFinite(retryAfterSeconds)
+      ? retryAfterSeconds
+      : 2 ** attempt; // 2s, 4s, ...
+
+    console.warn(
+      `Intercom 429 rate limit on ${path}, attempt ${attempt} — retrying after ${delaySeconds}s`
+    );
+    await sleep(delaySeconds * 1000);
+    return intercomRequest(path, init, attempt + 1);
+  }
+
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Intercom ${res.status} ${res.statusText}: ${text}`);
@@ -50,6 +73,8 @@ async function intercomRequest(path: string, init: RequestInit = {}): Promise<an
 
   return res.json();
 }
+
+// ---------- Search helpers ----------
 
 /**
  * Fetch all "enrolled" contacts whose participant date (Registration / Enrolled Date)
@@ -65,8 +90,12 @@ async function searchEnrolledContactsSince(sinceUnix: number): Promise<any[]> {
       query: {
         operator: 'AND',
         value: [
-          {field: 'role', operator: '=', value: 'user'},
-          {field:  "custom_attributes.Registration Date", operator: '>', value: sinceUnix }
+          { field: 'role', operator: '=', value: 'user' },
+          {
+            field: `custom_attributes.${REGISTRATION_ATTR_KEY}`,
+            operator: '>',
+            value: sinceUnix
+          }
         ]
       },
       pagination: {
@@ -87,7 +116,7 @@ async function searchEnrolledContactsSince(sinceUnix: number): Promise<any[]> {
     const totalCount = data.total_count ?? data.total ?? 'unknown';
 
     console.log(
-      `Contacts page ${page}: got ${contacts.length} contacts (total_count=${totalCount}).`
+      `New-participants contacts page ${page}: got ${contacts.length} contacts (total_count=${totalCount}).`
     );
 
     allContacts.push(...contacts);
@@ -104,10 +133,13 @@ async function searchEnrolledContactsSince(sinceUnix: number): Promise<any[]> {
 }
 
 /**
- * Fetch ALL closed conversations updated since `sinceUnix`,
+ * Fetch ALL closed conversations updated since `sinceUnix` for a given set of contacts,
  * following pagination using pages.next.starting_after.
  */
-async function searchClosedConversationsSince(sinceUnix: number, contactIds?: string[]): Promise<any[]> {
+async function searchClosedConversationsSince(
+  sinceUnix: number,
+  contactIds: string[]
+): Promise<any[]> {
   const allConversations: any[] = [];
   let startingAfter: string | undefined = undefined;
   let page = 1;
@@ -140,7 +172,7 @@ async function searchClosedConversationsSince(sinceUnix: number, contactIds?: st
     const totalCount = data.total_count ?? data.total ?? 'unknown';
 
     console.log(
-      `Conversations page ${page}: got ${conversations.length} conversations (total_count=${totalCount}).`
+      `New-participants conversations page ${page}: got ${conversations.length} conversations (total_count=${totalCount}).`
     );
 
     allConversations.push(...conversations);
@@ -152,7 +184,7 @@ async function searchClosedConversationsSince(sinceUnix: number, contactIds?: st
     page += 1;
   }
 
-  console.log(`Total fetched conversations: ${allConversations.length}`);
+  console.log(`Total fetched conversations for chunk: ${allConversations.length}`);
   return allConversations;
 }
 
@@ -163,6 +195,8 @@ async function fetchConversationsForContacts(
   const chunkSize = 15;
   const all: any[] = [];
 
+  if (!contactIds.length) return all;
+
   for (let i = 0; i < contactIds.length; i += chunkSize) {
     const chunk = contactIds.slice(i, i + chunkSize);
     const convs = await searchClosedConversationsSince(sinceUnix, chunk);
@@ -172,11 +206,12 @@ async function fetchConversationsForContacts(
   return all;
 }
 
-
 /**
  * Fetch all admins and build an ID->name map so we can label coaches.
  */
-async function fetchAdminMap(): Promise<Map<string, { name: string; email: string | null }>> {
+async function fetchAdminMap(): Promise<
+  Map<string, { name: string; email: string | null }>
+> {
   const map = new Map<string, { name: string; email: string | null }>();
 
   try {
@@ -195,6 +230,8 @@ async function fetchAdminMap(): Promise<Map<string, { name: string; email: strin
 
   return map;
 }
+
+// ---------- Types ----------
 
 interface SessionRow {
   memberId: string;
@@ -246,6 +283,8 @@ interface NewParticipantsReport {
   participants: ParticipantRow[];
 }
 
+// ---------- Bucketing ----------
+
 /**
  * Classify a participant into additive buckets based on daysWithoutSession.
  *
@@ -275,10 +314,14 @@ function classifyBuckets(daysWithoutSession: number | null): ParticipantBuckets 
   return { gt_14_to_21: false, gt_21_to_28: false, gt_28: false };
 }
 
+// ---------- Core report builder ----------
+
 /**
  * Build the report: enrolled participants + buckets.
  */
-async function buildNewParticipantsReport(lookbackDays: number): Promise<NewParticipantsReport> {
+async function buildNewParticipantsReport(
+  lookbackDays: number
+): Promise<NewParticipantsReport> {
   const nowUnix = Math.floor(Date.now() / 1000);
   const sinceUnix = nowUnix - lookbackDays * SECONDS_PER_DAY;
 
@@ -305,14 +348,14 @@ async function buildNewParticipantsReport(lookbackDays: number): Promise<NewPart
   for (const conv of conversations) {
     try {
       const attrs = conv.custom_attributes || {};
-      const channelValue = attrs[CHANNEL_ATTR_KEY];
+      const channelValue = attrs[CHANNEL_ATTR_KEY] as SessionChannel | undefined;
 
-      if (!SESSION_CHANNELS.includes(channelValue)) {
+      if (!channelValue || !SESSION_CHANNELS.includes(channelValue)) {
         continue;
       }
 
       const stats = conv.statistics || {};
-      const sessionTime =
+      const sessionTime: number | undefined =
         stats.last_close_at ||
         stats.last_admin_reply_at ||
         conv.updated_at ||
@@ -340,7 +383,7 @@ async function buildNewParticipantsReport(lookbackDays: number): Promise<NewPart
         const row: SessionRow = {
           memberId,
           coachId,
-          channel: channelValue as SessionChannel,
+          channel: channelValue,
           time: sessionTime
         };
 
@@ -373,6 +416,7 @@ async function buildNewParticipantsReport(lookbackDays: number): Promise<NewPart
           ? participantAtRaw
           : null;
 
+      // Defensively re-check that participant date is in window
       if (!participantAt || participantAt < sinceUnix) {
         continue;
       }
@@ -492,6 +536,8 @@ async function buildNewParticipantsReport(lookbackDays: number): Promise<NewPart
 
   return report;
 }
+
+// ---------- SvelteKit handler ----------
 
 /**
  * SvelteKit POST handler.
