@@ -21,23 +21,29 @@ const ATTR_ENGAGEMENT_STATUS_DATE = 'Engagement Status Date';
 const ATTR_ELIGIBLE_PROGRAMS = 'Eligible Programs';
 const ATTR_REGISTRATION_CODE = 'Registration Code';
 const ATTR_REFERRAL = 'Referral';
-const ATTR_ENROLLED_DATE = 'Enrolled Date'; // adjust to "Registration Date" if needed
+const ATTR_ENROLLED_DATE = 'Enrolled Date'; // contact attribute used for participant date
+
+type ReturnMode = 'file' | 'stream' | 'json';
 
 // ----- Types -----
 
 type ExportRequestBody = {
-  outputPath: string;
+  // New: how the API should return results
+  returnMode?: ReturnMode;
+
+  // Optional file output (only used when returnMode === "file")
+  outputPath?: string;
 
   // Filters (all optional; if omitted they won’t be applied)
-  referral?: string;                // custom_attributes.Referral
-  employer?: string;                // custom_attributes.Employer
-  enrolledDateStart?: string;       // "YYYY-MM-DD"
-  enrolledDateEnd?: string;         // "YYYY-MM-DD"
-  lastSessionStart?: string;        // "YYYY-MM-DD"
-  lastSessionEnd?: string;          // "YYYY-MM-DD"
+  referral?: string;                 // custom_attributes.Referral
+  employer?: string;                 // custom_attributes.Employer
+  enrolledDateStart?: string;        // "YYYY-MM-DD"
+  enrolledDateEnd?: string;          // "YYYY-MM-DD"
+  lastSessionStart?: string;         // "YYYY-MM-DD"
+  lastSessionEnd?: string;           // "YYYY-MM-DD"
   engagementStatus?: string | string[]; // e.g. "Engaged" or ["Engaged","At Risk"]
 
-  perPage?: number;                 // optional override, default 150
+  perPage?: number;                  // optional override, default 150
 };
 
 type IntercomContact = {
@@ -272,7 +278,7 @@ function buildCsv(contacts: IntercomContact[]): { csv: string; rows: any[] } {
 
     // Employee ID
     const employeeId =
-      attrs[ATTR_USER_ID] ?? contact['external_id'] ?? contact.id ?? '';
+      attrs[ATTR_USER_ID] ?? (contact as any)['external_id'] ?? contact.id ?? '';
 
     // Name → split into first / last
     const rawNameAttr = attrs[ATTR_NAME] ?? contact.name ?? '';
@@ -345,48 +351,81 @@ export const POST: RequestHandler = async ({ request }) => {
   try {
     const body = (await request.json()) as ExportRequestBody;
 
-    if (!body.outputPath || typeof body.outputPath !== 'string') {
+    // Decide behaviour:
+    // - explicit body.returnMode wins
+    // - else, if outputPath is provided → "file"
+    // - else → default to "stream"
+    const mode: ReturnMode =
+      body.returnMode ?? (body.outputPath ? 'file' : 'stream');
+
+    const outPathAbs = body.outputPath ? path.resolve(body.outputPath) : null;
+
+    if (mode === 'file' && !outPathAbs) {
       return new Response(
-        JSON.stringify({ error: 'outputPath is required and must be a string' }),
+        JSON.stringify({
+          error: 'outputPath is required and must be a string when returnMode="file"'
+        }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    const outPathAbs = path.resolve(body.outputPath);
-
     console.log('Starting CSV export with filters:', {
-      referral: body.referral,
-      employer: body.employer,
-      enrolledDateStart: body.enrolledDateStart,
-      enrolledDateEnd: body.enrolledDateEnd,
-      lastSessionStart: body.lastSessionStart,
-      lastSessionEnd: body.lastSessionEnd,
-      engagementStatus: body.engagementStatus,
-      perPage: body.perPage
+      ...body,
+      outputPath: outPathAbs,
+      returnMode: mode
     });
 
     const contacts = await searchContactsForExport(body);
     const { csv, rows } = buildCsv(contacts);
 
-    // Ensure directory exists
-    const dir = path.dirname(outPathAbs);
-    await fs.mkdir(dir, { recursive: true });
+    // ---- Mode: write to filesystem and return JSON summary ----
+    if (mode === 'file' && outPathAbs) {
+      const dir = path.dirname(outPathAbs);
+      await fs.mkdir(dir, { recursive: true });
 
-    await fs.writeFile(outPathAbs, csv, 'utf8');
-    console.log(`CSV export written to ${outPathAbs} (${rows.length} rows)`);
+      await fs.writeFile(outPathAbs, csv, 'utf8');
+      console.log(`CSV export written to ${outPathAbs} (${rows.length} rows)`);
 
-    // Return summary + small preview
-    const previewRows = rows.slice(0, 10);
+      const previewRows = rows.slice(0, 10);
 
-    return new Response(
-      JSON.stringify({
-        outputPath: outPathAbs,
-        totalContacts: contacts.length,
-        rowsWritten: rows.length,
-        preview: previewRows
-      }),
-      { headers: { 'Content-Type': 'application/json' } }
-    );
+      return new Response(
+        JSON.stringify({
+          mode,
+          outputPath: outPathAbs,
+          totalContacts: contacts.length,
+          rowsWritten: rows.length,
+          preview: previewRows
+        }),
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ---- Mode: JSON summary only (no file write, no CSV body) ----
+    if (mode === 'json') {
+      const previewRows = rows.slice(0, 100);
+      return new Response(
+        JSON.stringify({
+          mode,
+          totalContacts: contacts.length,
+          rowsWritten: rows.length,
+          preview: previewRows
+        }),
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ---- Default / "stream": return CSV as response body ----
+    const fileName = `engagement_export_${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
+
+    return new Response(csv, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${fileName}"`
+      }
+    });
   } catch (e: any) {
     console.error('Intercom export-members-csv failed:', e?.message ?? e);
     return new Response(
