@@ -37,6 +37,7 @@ type ExportRequestBody = {
   // Filters (all optional; if omitted they won’t be applied)
   referral?: string;                 // custom_attributes.Referral
   employer?: string;                 // custom_attributes.Employer
+  employerExclusions?: string | string[];   // one or more Employer values to EXCLUDE
   enrolledDateStart?: string;        // "YYYY-MM-DD"
   enrolledDateEnd?: string;          // "YYYY-MM-DD"
   lastSessionStart?: string;         // "YYYY-MM-DD"
@@ -154,6 +155,26 @@ function buildContactSearchQuery(body: ExportRequestBody): any {
       operator: '=',
       value: body.employer
     });
+  }
+
+  if (body.employerExclusions && body.employerExclusions.length) {
+    const excluded = body.employerExclusions.filter((v) => !!v && v.trim().length > 0);
+
+    if (excluded.length === 1) {
+      // Single value → "!="
+      filters.push({
+        field: `custom_attributes.${ATTR_EMPLOYER}`,
+        operator: '!=',
+        value: excluded[0]
+      });
+    } else if (excluded.length > 1) {
+      // Multiple values → "NIN" (NOT IN)
+      filters.push({
+        field: `custom_attributes.${ATTR_EMPLOYER}`,
+        operator: 'NIN',
+        value: excluded
+      });
+    }
   }
 
   const enrolledStartUnix = parseDateToUnix(body.enrolledDateStart);
