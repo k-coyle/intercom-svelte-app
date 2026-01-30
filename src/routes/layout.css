@@ -1,3 +1,278 @@
+@import '../styles/css-variables.css';
+@config "../../tailwind.config.js";
 @import 'tailwindcss';
-@plugin '@tailwindcss/forms';
-@plugin '@tailwindcss/typography';
+
+/* ------------------------------
+   Base
+-------------------------------- */
+@layer base {
+  html {
+    font-family: theme(fontFamily.sans);
+  }
+
+  body {
+    @apply bg-neutral-0 text-neutral-100;
+  }
+
+  h1 {
+    @apply text-title-md md:text-title-lg font-bold;
+  }
+
+  h2 {
+    @apply text-title-md font-bold;
+  }
+
+  p {
+    @apply text-body;
+  }
+
+  ul {
+    @apply list-disc pl-5;
+  }
+
+  li {
+    @apply text-list-item text-neutral-70 my-1;
+  }
+
+  a {
+    @apply text-primary-blue60 hover:text-primary-deep60;
+  }
+}
+
+/* ------------------------------
+   Shared page + component classes
+   (keeps existing markup working, but routes styling through the design system)
+-------------------------------- */
+@layer components {
+  /* Layout */
+  .page {
+    @apply mx-auto max-w-[1200px] p-6;
+  }
+
+  .grid {
+    @apply grid gap-6 items-start;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.9fr);
+  }
+
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+
+  /* Stacks */
+  .reports {
+    @apply flex flex-col gap-4;
+  }
+
+  .api-section {
+    @apply mt-8;
+  }
+
+  /* Headings / helper text */
+  .intro,
+  .subtitle,
+  .subtitle-details,
+  .muted {
+    @apply text-neutral-60;
+  }
+
+  .section-title {
+    @apply text-title-md;
+  }
+
+  .section-subtitle {
+    @apply text-tab-label text-neutral-60;
+  }
+
+  .label {
+    @apply text-label-sm text-neutral-70;
+  }
+
+  /* Cards */
+  .card,
+  .metric-card {
+    @apply rounded-md border border-neutral-20 bg-neutral-0 shadow-card;
+  }
+
+  .card {
+    @apply p-4;
+  }
+
+  .card-header {
+    @apply flex items-center justify-between gap-2 mb-2;
+  }
+
+  .card-title {
+    @apply font-semibold text-body;
+  }
+
+  .card-summary {
+    @apply text-list-item text-neutral-60;
+  }
+
+  .card-footer {
+    @apply flex items-center justify-between gap-2 mt-3;
+  }
+
+  /* Chips / pills */
+  .chip {
+    @apply inline-flex items-center rounded-pill px-2 py-1 text-[12px] font-semibold;
+    @apply bg-pastel-blue30 text-accent-navy90;
+  }
+
+  .pill {
+    @apply inline-flex items-center rounded-pill px-2 py-1 text-[12px] font-semibold;
+    @apply bg-pastel-cyan30 text-accent-navy90;
+  }
+
+  .chip-new {
+    @apply bg-pastel-yellow30 text-accent-brown90;
+  }
+
+  .chip-engaged {
+    @apply bg-pastel-green30 text-primary-green100;
+  }
+
+  /* Controls */
+  .controls,
+  .filters {
+    @apply flex flex-wrap items-center gap-3 mb-4;
+  }
+
+  .filter-group {
+    @apply flex flex-col gap-1 min-w-[240px];
+  }
+
+  .filter-group label {
+    @apply text-label-sm text-neutral-70;
+  }
+
+  /* Inputs */
+  select,
+  input[type='month'],
+  input[type='date'],
+  input[type='number'],
+  input[type='text'] {
+    @apply rounded-md border border-neutral-20 bg-neutral-0 px-3 py-2 text-body;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-blue60/30 focus:border-primary-blue60;
+  }
+
+  /* Buttons */
+  button,
+  .open-link {
+    @apply inline-flex items-center justify-center gap-2 rounded-pill px-4 py-2 text-tab-label;
+    @apply transition-shadow;
+  }
+
+  button:disabled,
+  .open-link[aria-disabled='true'] {
+    @apply opacity-50 cursor-not-allowed;
+  }
+
+  button.primary,
+  button.reload,
+  .open-link {
+    @apply bg-primary-blue60 text-white border border-primary-deep60 shadow-card;
+  }
+
+  button.primary:hover:not(:disabled),
+  button.reload:hover:not(:disabled),
+  .open-link:hover {
+    @apply shadow-hover;
+  }
+
+  button.secondary {
+    @apply bg-neutral-0 text-neutral-100 border border-neutral-30;
+  }
+
+  button.secondary:hover:not(:disabled) {
+    @apply shadow-card;
+  }
+
+  /* Error */
+  .error {
+    @apply text-accent-danger60;
+  }
+
+  /* Tables */
+  table,
+  .members-table {
+    @apply w-full border-collapse text-list-item;
+  }
+
+  th,
+  td {
+    @apply border border-neutral-20 px-3 py-2 align-top;
+  }
+
+  thead {
+    @apply bg-neutral-10;
+  }
+
+  /* Metric cards */
+  .metrics {
+    @apply grid gap-3;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+
+  .metric-card {
+    @apply p-4;
+  }
+
+  .metric-label {
+    @apply text-label-sm text-neutral-60;
+  }
+
+  .metric-value {
+    @apply text-field-value;
+  }
+
+  /* Code blocks / paths */
+  .code-block {
+    @apply rounded-md border border-neutral-20 bg-neutral-10 p-3 text-[12px] overflow-auto;
+  }
+
+  .path {
+    @apply font-mono text-[12px] text-neutral-70;
+  }
+
+  /* Channel checkboxes layout */
+  .channel-checkboxes {
+    @apply flex flex-wrap gap-3;
+  }
+
+  /* Summary grid (billing/caseload) */
+  .summary {
+    @apply grid gap-3 mb-6;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+
+  .card-label,
+  .metric-label {
+    @apply text-label-sm text-neutral-60;
+  }
+
+  .card-value,
+  .metric-value {
+    @apply font-semibold;
+  }
+
+  /* Glossary */
+  .glossary {
+    @apply flex flex-col gap-3;
+  }
+
+  .glossary-item {
+    @apply rounded-md border border-neutral-20 bg-neutral-0 p-4;
+  }
+
+  .glossary-term {
+    @apply font-semibold;
+  }
+
+  .glossary-def {
+    @apply text-neutral-60 text-list-item;
+  }
+}
