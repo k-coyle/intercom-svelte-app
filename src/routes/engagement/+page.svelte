@@ -1,4 +1,10 @@
 <script lang="ts">
+  import * as Card from "$lib/components/ui/card/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import * as Accordion from "$lib/components/ui/accordion/index.js";
+  import { Separator } from "$lib/components/ui/separator/index.js";
+
   type ReportLink = {
     id: string;
     name: string;
@@ -151,207 +157,253 @@
 
   // ---- Background jobs / API endpoints ----
 
-  type ApiEndpoint = {
-    id: string;
-    name: string;
-    path: string;        // HTTP method + URL
-    summary: string;
-    schedule: string;    // how/when it’s typically run
-    payload?: string;    // example JSON body (optional)
-    notes?: string[];
-  };
+// ---- Background jobs / API endpoints ----
 
-  const apiEndpoints: ApiEndpoint[] = [
-    {
-      id: 'session-index-v2',
-      name: 'Session Indexer v2',
-      path: 'POST /API/engagement/report/session-index',
-      summary:
-        'Scans qualifying conversations and updates Last Coaching Session, First Session Date, and Last Call for enrolled members.',
-      schedule:
-        'Daily via cron/EventBridge. Run once with a large lookback for backfill, then with smaller windows (e.g., 7–30 days).',
-      notes: [
-        'Qualifying coaching sessions: closed conversations where Channel ∈ {Phone, Video Conference} and Service Code ∈ {"Health Coaching 001", "Disease Management 002"}.',
-        'Also updates Last Call for any Phone conversations, regardless of close state.',
-        'Respects lookbackDays in the request body for incremental runs.'
-      ]
-    },
-    {
-      id: 'engagement-classifier-v2',
-      name: 'Engagement Classifier v2',
-      path: 'POST /API/engagement/report/engagement',
-      summary:
-        'Reads Enrolled Date, First Session Date, and Last Coaching Session to compute Engagement Status and Engagement Status Date for enrolled members.',
-      schedule:
-        'Daily, after Session Indexer v2 completes, using a similar lookback window.',
-      payload: `{"lookbackDays": 365, "dryRun": false}`,
-      notes: [
-        'Engaged: last qualifying session ≤28 days ago OR Enrolled Date ≤28 days ago with no session yet.',
-        'At Risk: last qualifying session 29–56 days ago.',
-        'Unengaged: last qualifying session >56 days ago OR (when Engagement Status has never been set) first qualifying session occurs >28 days after Enrolled Date.',
-        'Only considers qualifying sessions (Phone/Video + Service Code = 001 or 002).'
-      ]
-    },
-    {
-      id: 'referral-eligible-programs',
-      name: 'Referral → Eligible Programs Sync',
-      path: 'POST /API/engagement/report/referral-sync',
-      summary:
-        'For members with Referral = "Counter Health", sets Eligible Programs = "Smart Access".',
-      schedule:
-        'Run nightly or as needed after new members are loaded from upstream systems.',
-      notes: [
-        'Idempotent: safe to run repeatedly.',
-        'Can be extended to map additional Referral values to Eligible Programs.'
-      ]
-    },
-    {
-      id: 'export-members-csv',
-      name: 'Member Export CSV',
-      path: 'POST /API/engagement/export-members-csv',
-      summary:
-        'Exports a CSV of enrolled members and key attributes for ad-hoc analysis or downstream BI.',
-      schedule:
-        'On-demand from the command line (curl) or a one-off job. Not wired to the UI.',
-      payload: `{
-  "outputPath": "/path/to/engagement_report.csv",
-  "referral": "Counter Health",
-  "employer": "ACME Corp",
-  "enrolledStart": "2024-01-01",
-  "enrolledEnd": "2024-12-31",
-  "lastSessionStart": "2024-06-01",
-  "lastSessionEnd": "2024-06-30",
-  "engagementStatus": "Unengaged",
-  "perPage": 150
-}`,
-      notes: [
-        'Filters (Referral, Employer, Enrolled Date window, Last Session Date window, Engagement Status) are pushed into a database search where possible to keep exports fast.',
-        'CSV columns follow the external spec: employee_id, name_first, name_last, member_dob, group_description, last_coaching_session, program_status, status_date, eligible_programs, registration_code.'
-      ]
-    }
-  ];
+type ApiEndpoint = {
+  id: string;
+  name: string;
+  path: string;        // HTTP method + URL
+  summary: string;
+  schedule: string;    // how/when it’s typically run
+  payload?: string;    // example JSON body (optional)
+  notes?: string[];
+};
+
+const apiEndpoints: ApiEndpoint[] = [
+  {
+    id: 'session-sync',
+    name: 'Session Sync',
+    path: 'POST /API/engagement/session-sync',
+    summary:
+      'Indexes coaching sessions/calls from conversations and writes derived fields back to Intercom as custom attributes (e.g., last session date, first session date, etc.).',
+    schedule:
+      'Run on a schedule (cron/EventBridge). Typically: daily incremental runs; occasional longer lookback for backfills.',
+    payload: `{"lookbackDays":100,"mode":"all","dryRun":false}`,
+    notes: [
+      'This endpoint updates Intercom custom attributes.',
+      'Use a larger lookback for backfills; smaller lookbacks for daily increments.',
+      'dryRun=true should produce logs/preview without writing updates.'
+    ]
+  },
+  {
+    id: 'engagement-sync',
+    name: 'Engagement Sync',
+    path: 'POST /API/engagement/engagement-sync',
+    summary:
+      'Computes engagement classification (Engaged / At Risk / Unengaged) based on business rules and writes results to Intercom contact custom attributes.',
+    schedule:
+      'Run on a schedule after Session Sync (cron/EventBridge). Usually daily.',
+    payload: `{"dryRun":false,"enrolledLookbackDays":100}`,
+    notes: [
+      'This endpoint updates Intercom custom attributes.',
+      'Typically depends on session-related attributes already being up to date (run after Session Sync).',
+      'enrolledLookbackDays bounds how far back to consider newly/previously enrolled members.'
+    ]
+  },
+  {
+    id: 'referral-sync',
+    name: 'Referral Sync',
+    path: 'POST /API/engagement/referral-sync',
+    summary:
+      'Syncs referral-driven eligibility/program fields (maps Referral → Eligible Programs or other reporting/eligibility attributes) and writes them back to Intercom.',
+    schedule:
+      'Nightly or as needed after upstream member/referral loads. Safe to run repeatedly.',
+    payload: `{"dryRun":false}`,
+    notes: [
+      'This endpoint updates Intercom custom attributes.',
+      'Idempotent by design (re-running should not create duplicates).'
+    ]
+  },
+  {
+    id: 'report-engagement',
+    name: 'Engagement Report Stream',
+    path: 'POST /API/engagement/report/engagement',
+    summary:
+      'Generates an engagement reporting stream (report-facing dataset) used by dashboards/exports. This is reporting output, not Intercom attribute updates.',
+    schedule:
+      'Run on a schedule (monthly) or on-demand for validation. May run after Engagement Sync depending on your pipeline.',
+    payload: `{"lookbackDays":365,"dryRun":false}`,
+    notes: [
+      'This endpoint produces a reporting data stream (or report dataset) rather than updating Intercom attributes.',
+      'Use lookbackDays to control report window / recomputation scope.',
+      'If you want parity with Intercom attributes, run after Engagement Sync.'
+    ]
+  }
+];
 </script>
 
-<div class="page">
-  <h1>Coaching Analytics Reports</h1>
-  <p class="intro">
-    This home page documents the analytics reports built on top of the data and provides
-    definitions for key terms used across dashboards. Use it as the single source of truth for how
-    metrics are calculated and where to find them.
-  </p>
+<div class="container mx-auto max-w-6xl space-y-10 px-4 py-8">
+  <!-- Header -->
+  <header class="space-y-2">
+    <h1 class="text-3xl font-semibold tracking-tight">
+      Coaching Analytics Reports
+    </h1>
+    <p class="max-w-3xl text-sm text-muted-foreground">
+      This home page documents the analytics reports built on top of the data and provides definitions
+      for key terms used across dashboards. Use it as the single source of truth for how metrics are
+      calculated and where to find them.
+    </p>
+  </header>
 
-  <div class="grid">
-    <!-- LEFT: Reports catalog -->
-    <div>
-      <div class="section-title">Available Reports</div>
-      <div class="section-subtitle">
-        Each report uses conversations and contact attributes, with standardized definitions
-        for coaching sessions, engagement buckets, and participant status.
+  <!-- Reports + Glossary -->
+  <div class="grid gap-6 lg:grid-cols-3">
+    <!-- LEFT: Reports -->
+    <section class="space-y-4 lg:col-span-2">
+      <div class="space-y-1">
+        <h2 class="text-lg font-medium">Available Reports</h2>
+        <p class="text-sm text-muted-foreground">
+          Each report uses conversations and contact attributes, with standardized definitions for coaching sessions,
+          engagement buckets, and participant status.
+        </p>
       </div>
 
-      <div class="reports">
+      <div class="space-y-4">
         {#each reports as r}
-          <div class="card" id={r.id}>
-            <div class="card-header">
-              <div class="card-title">{r.name}</div>
-              <div class="chip">{r.primaryAudience}</div>
-            </div>
+          <Card.Root id={r.id}>
+            <Card.Header class="space-y-3">
+              <div class="flex flex-wrap items-start justify-between gap-2">
+                <div class="space-y-1">
+                  <Card.Title class="text-xl">{r.name}</Card.Title>
+                  <Card.Description>{r.summary}</Card.Description>
+                </div>
+                <Badge variant="secondary" class="max-w-full whitespace-normal">
+                  {r.primaryAudience}
+                </Badge>
+              </div>
+            </Card.Header>
 
-            <div class="card-summary">
-              {r.summary}
-            </div>
+            <Card.Content class="space-y-3">
+              <Accordion.Root type="multiple" class="w-full">
+                <Accordion.Item value={`${r.id}-metrics`}>
+                  <Accordion.Trigger>Key metrics</Accordion.Trigger>
+                  <Accordion.Content>
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                      {#each r.metrics as m}
+                        <li>{m}</li>
+                      {/each}
+                    </ul>
+                  </Accordion.Content>
+                </Accordion.Item>
 
-            <div class="label">Key metrics</div>
-            <ul>
-              {#each r.metrics as m}
-                <li>{m}</li>
-              {/each}
-            </ul>
+                <Accordion.Item value={`${r.id}-filters`}>
+                  <Accordion.Trigger>Filters</Accordion.Trigger>
+                  <Accordion.Content>
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                      {#each r.filters as f}
+                        <li>{f}</li>
+                      {/each}
+                    </ul>
+                  </Accordion.Content>
+                </Accordion.Item>
 
-            <div class="label">Filters</div>
-            <ul>
-              {#each r.filters as f}
-                <li>{f}</li>
-              {/each}
-            </ul>
+                {#if r.notes?.length}
+                  <Accordion.Item value={`${r.id}-notes`}>
+                    <Accordion.Trigger>Important notes</Accordion.Trigger>
+                    <Accordion.Content>
+                      <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                        {#each r.notes as note}
+                          <li>{note}</li>
+                        {/each}
+                      </ul>
+                    </Accordion.Content>
+                  </Accordion.Item>
+                {/if}
+              </Accordion.Root>
+            </Card.Content>
 
-            {#if r.notes && r.notes.length}
-              <div class="label">Important notes</div>
-              <ul>
-                {#each r.notes as note}
-                  <li>{note}</li>
-                {/each}
-              </ul>
-            {/if}
-
-            <div class="card-footer">
-              <a class="open-link" href={r.path}>
+            <Card.Footer class="flex flex-wrap items-center justify-between gap-2">
+              <!-- Button supports href (renders <a>) -->
+              <Button href={r.path} size="sm">
                 Open report
-              </a>
-              <span class="path">{r.path}</span>
-            </div>
-          </div>
+              </Button>
+
+              <span class="text-xs text-muted-foreground">{r.path}</span>
+            </Card.Footer>
+          </Card.Root>
         {/each}
       </div>
-    </div>
+    </section>
 
-    <!-- RIGHT: Glossary / shared definitions -->
-    <aside class="glossary">
-      <h2>Shared Definitions</h2>
-      <p class="section-subtitle">
-        These terms are used consistently across all dashboards. Changes here should be reflected in
-        code and documentation together.
-      </p>
+    <!-- RIGHT: Glossary -->
+    <aside class="space-y-4">
+      <Card.Root class="lg:sticky lg:top-6">
+        <Card.Header class="space-y-1">
+          <Card.Title>Shared Definitions</Card.Title>
+          <Card.Description>
+            These terms are used consistently across all dashboards. Changes here should be reflected
+            in code and documentation together.
+          </Card.Description>
+        </Card.Header>
 
-      {#each glossary as g}
-        <div class="glossary-item">
-          <div class="glossary-term">{g.term}</div>
-          <div class="glossary-def">{g.def}</div>
-        </div>
-      {/each}
+        <Card.Content class="space-y-4">
+          {#each glossary as g, i}
+            <div class="space-y-1">
+              <div class="text-sm font-medium">{g.term}</div>
+              <div class="text-sm text-muted-foreground">{g.def}</div>
+            </div>
+
+            {#if i < glossary.length - 1}
+              <Separator />
+            {/if}
+          {/each}
+        </Card.Content>
+      </Card.Root>
     </aside>
   </div>
 
-  <!-- New: Background jobs / API endpoints -->
-  <div class="api-section">
-    <div class="section-title">Background Jobs & API Endpoints</div>
-    <div class="section-subtitle">
-      These backend endpoints keep data attributes in sync and support the reports above. They are
-      typically triggered via cron/EventBridge or from the command line, not directly from the UI.
+  <!-- Background jobs / API endpoints -->
+  <section class="space-y-4">
+    <div class="space-y-1">
+      <h2 class="text-lg font-medium">Background Jobs & API Endpoints</h2>
+      <p class="text-sm text-muted-foreground">
+        These backend endpoints keep data attributes in sync and support the reports above. They are
+        typically triggered via cron/EventBridge or from the command line, not directly from the UI.
+      </p>
     </div>
 
-    <div class="reports">
+    <div class="space-y-4">
       {#each apiEndpoints as e}
-        <div class="card" id={e.id}>
-          <div class="card-header">
-            <div class="card-title">{e.name}</div>
-            <div class="chip">{e.path}</div>
-          </div>
+        <Card.Root id={e.id}>
+          <Card.Header class="space-y-3">
+            <div class="flex flex-wrap items-start justify-between gap-2">
+              <div class="space-y-1">
+                <Card.Title class="text-xl">{e.name}</Card.Title>
+                <Card.Description>{e.summary}</Card.Description>
+              </div>
 
-          <div class="card-summary">
-            {e.summary}
-          </div>
+              <Badge variant="outline" class="max-w-full whitespace-normal break-all font-mono text-xs">
+                {e.path}
+              </Badge>
+            </div>
+          </Card.Header>
 
-          <div class="label">Typical schedule</div>
-          <ul>
-            <li>{e.schedule}</li>
-          </ul>
+          <Card.Content class="space-y-3">
+            <div class="space-y-1">
+              <div class="text-sm font-medium">Typical schedule</div>
+              <div class="text-sm text-muted-foreground">{e.schedule}</div>
+            </div>
 
-          {#if e.payload}
-            <div class="label">Example payload</div>
-            <pre class="code-block">{e.payload}</pre>
-          {/if}
+            {#if e.payload}
+              <div class="space-y-2">
+                <div class="text-sm font-medium">Example payload</div>
+                <pre class="max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed text-muted-foreground">
+{e.payload}</pre>
+              </div>
+            {/if}
 
-          {#if e.notes && e.notes.length}
-            <div class="label">Notes</div>
-            <ul>
-              {#each e.notes as note}
-                <li>{note}</li>
-              {/each}
-            </ul>
-          {/if}
-        </div>
+            {#if e.notes?.length}
+              <div class="space-y-2">
+                <div class="text-sm font-medium">Notes</div>
+                <ul class="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                  {#each e.notes as note}
+                    <li>{note}</li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+          </Card.Content>
+        </Card.Root>
       {/each}
     </div>
-  </div>
+  </section>
 </div>

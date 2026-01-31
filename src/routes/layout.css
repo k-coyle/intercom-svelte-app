@@ -1,278 +1,121 @@
-@import '../styles/css-variables.css';
-@config "../../tailwind.config.js";
-@import 'tailwindcss';
+@import "tailwindcss";
 
-/* ------------------------------
-   Base
--------------------------------- */
-@layer base {
-  html {
-    font-family: theme(fontFamily.sans);
-  }
+@import "tw-animate-css";
 
-  body {
-    @apply bg-neutral-0 text-neutral-100;
-  }
+@custom-variant dark (&:is(.dark *));
 
-  h1 {
-    @apply text-title-md md:text-title-lg font-bold;
-  }
-
-  h2 {
-    @apply text-title-md font-bold;
-  }
-
-  p {
-    @apply text-body;
-  }
-
-  ul {
-    @apply list-disc pl-5;
-  }
-
-  li {
-    @apply text-list-item text-neutral-70 my-1;
-  }
-
-  a {
-    @apply text-primary-blue60 hover:text-primary-deep60;
-  }
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.141 0.005 285.823);
+  --sidebar-primary: oklch(0.21 0.006 285.885);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.967 0.001 286.375);
+  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+  --sidebar-border: oklch(0.92 0.004 286.32);
+  --sidebar-ring: oklch(0.705 0.015 286.067);
 }
 
-/* ------------------------------
-   Shared page + component classes
-   (keeps existing markup working, but routes styling through the design system)
--------------------------------- */
-@layer components {
-  /* Layout */
-  .page {
-    @apply mx-auto max-w-[1200px] p-6;
+.dark {
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.21 0.006 285.885);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.21 0.006 285.885);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.92 0.004 286.32);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.552 0.016 285.938);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.21 0.006 285.885);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.274 0.006 286.033);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.552 0.016 285.938);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
   }
-
-  .grid {
-    @apply grid gap-6 items-start;
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.9fr);
-  }
-
-  @media (max-width: 900px) {
-    .grid {
-      grid-template-columns: 1fr;
-    }
-  }
-
-
-  /* Stacks */
-  .reports {
-    @apply flex flex-col gap-4;
-  }
-
-  .api-section {
-    @apply mt-8;
-  }
-
-  /* Headings / helper text */
-  .intro,
-  .subtitle,
-  .subtitle-details,
-  .muted {
-    @apply text-neutral-60;
-  }
-
-  .section-title {
-    @apply text-title-md;
-  }
-
-  .section-subtitle {
-    @apply text-tab-label text-neutral-60;
-  }
-
-  .label {
-    @apply text-label-sm text-neutral-70;
-  }
-
-  /* Cards */
-  .card,
-  .metric-card {
-    @apply rounded-md border border-neutral-20 bg-neutral-0 shadow-card;
-  }
-
-  .card {
-    @apply p-4;
-  }
-
-  .card-header {
-    @apply flex items-center justify-between gap-2 mb-2;
-  }
-
-  .card-title {
-    @apply font-semibold text-body;
-  }
-
-  .card-summary {
-    @apply text-list-item text-neutral-60;
-  }
-
-  .card-footer {
-    @apply flex items-center justify-between gap-2 mt-3;
-  }
-
-  /* Chips / pills */
-  .chip {
-    @apply inline-flex items-center rounded-pill px-2 py-1 text-[12px] font-semibold;
-    @apply bg-pastel-blue30 text-accent-navy90;
-  }
-
-  .pill {
-    @apply inline-flex items-center rounded-pill px-2 py-1 text-[12px] font-semibold;
-    @apply bg-pastel-cyan30 text-accent-navy90;
-  }
-
-  .chip-new {
-    @apply bg-pastel-yellow30 text-accent-brown90;
-  }
-
-  .chip-engaged {
-    @apply bg-pastel-green30 text-primary-green100;
-  }
-
-  /* Controls */
-  .controls,
-  .filters {
-    @apply flex flex-wrap items-center gap-3 mb-4;
-  }
-
-  .filter-group {
-    @apply flex flex-col gap-1 min-w-[240px];
-  }
-
-  .filter-group label {
-    @apply text-label-sm text-neutral-70;
-  }
-
-  /* Inputs */
-  select,
-  input[type='month'],
-  input[type='date'],
-  input[type='number'],
-  input[type='text'] {
-    @apply rounded-md border border-neutral-20 bg-neutral-0 px-3 py-2 text-body;
-    @apply focus:outline-none focus:ring-2 focus:ring-primary-blue60/30 focus:border-primary-blue60;
-  }
-
-  /* Buttons */
-  button,
-  .open-link {
-    @apply inline-flex items-center justify-center gap-2 rounded-pill px-4 py-2 text-tab-label;
-    @apply transition-shadow;
-  }
-
-  button:disabled,
-  .open-link[aria-disabled='true'] {
-    @apply opacity-50 cursor-not-allowed;
-  }
-
-  button.primary,
-  button.reload,
-  .open-link {
-    @apply bg-primary-blue60 text-white border border-primary-deep60 shadow-card;
-  }
-
-  button.primary:hover:not(:disabled),
-  button.reload:hover:not(:disabled),
-  .open-link:hover {
-    @apply shadow-hover;
-  }
-
-  button.secondary {
-    @apply bg-neutral-0 text-neutral-100 border border-neutral-30;
-  }
-
-  button.secondary:hover:not(:disabled) {
-    @apply shadow-card;
-  }
-
-  /* Error */
-  .error {
-    @apply text-accent-danger60;
-  }
-
-  /* Tables */
-  table,
-  .members-table {
-    @apply w-full border-collapse text-list-item;
-  }
-
-  th,
-  td {
-    @apply border border-neutral-20 px-3 py-2 align-top;
-  }
-
-  thead {
-    @apply bg-neutral-10;
-  }
-
-  /* Metric cards */
-  .metrics {
-    @apply grid gap-3;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  }
-
-  .metric-card {
-    @apply p-4;
-  }
-
-  .metric-label {
-    @apply text-label-sm text-neutral-60;
-  }
-
-  .metric-value {
-    @apply text-field-value;
-  }
-
-  /* Code blocks / paths */
-  .code-block {
-    @apply rounded-md border border-neutral-20 bg-neutral-10 p-3 text-[12px] overflow-auto;
-  }
-
-  .path {
-    @apply font-mono text-[12px] text-neutral-70;
-  }
-
-  /* Channel checkboxes layout */
-  .channel-checkboxes {
-    @apply flex flex-wrap gap-3;
-  }
-
-  /* Summary grid (billing/caseload) */
-  .summary {
-    @apply grid gap-3 mb-6;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  }
-
-  .card-label,
-  .metric-label {
-    @apply text-label-sm text-neutral-60;
-  }
-
-  .card-value,
-  .metric-value {
-    @apply font-semibold;
-  }
-
-  /* Glossary */
-  .glossary {
-    @apply flex flex-col gap-3;
-  }
-
-  .glossary-item {
-    @apply rounded-md border border-neutral-20 bg-neutral-0 p-4;
-  }
-
-  .glossary-term {
-    @apply font-semibold;
-  }
-
-  .glossary-def {
-    @apply text-neutral-60 text-list-item;
+  body {
+    @apply bg-background text-foreground;
   }
 }
