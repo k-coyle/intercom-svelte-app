@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
+
   // Keep in sync with backend
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
 
@@ -51,6 +53,8 @@
     name: string;
   }
 
+  // -------- State --------
+
   // Active report currently being used for display
   let report: CaseloadReport | null = null;
 
@@ -60,6 +64,12 @@
 
   let loading = false;
   let error: string | null = null;
+
+  // Optional progress text for the button area
+  let progressText: string | null = null;
+
+  // Track the server-side job for cleanup
+  let activeJobId: string | null = null;
 
   // Filters
   let selectedLookbackDays: string = ''; // user must set this before first load
@@ -81,6 +91,8 @@
   let filteredMembers: CaseloadMemberRow[] = [];
   let bucketTable: BucketRow[] = [];
 
+  // -------- Helpers: filtering UI (unchanged) --------
+
   function getSelectedChannels(): SessionChannel[] {
     return allChannels.filter((ch) => selectedChannels[ch]);
   }
@@ -94,7 +106,6 @@
     for (const m of source.members) {
       m.coachIds.forEach((id, index) => {
         const rawName = m.coachNames[index] ?? m.coachNames[0] ?? id;
-        // 👇 Force name to a string so localeCompare is always valid
         const name = String(rawName);
         if (!coachMap.has(id)) {
           coachMap.set(id, name);
@@ -178,6 +189,148 @@
     );
   }
 
+  // -------- Helpers: job backend calls --------
+
+  async function cleanupJob(jobId: string) {
+    try {
+      // keepalive helps cleanup on navigation/unload in many browsers
+      await fetch('/API/engagement/caseload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: 'cleanup', jobId }),
+        keepalive: true
+      });
+    } catch {
+      // ignore cleanup failures
+    }
+  }
+
+  async function createJob(lookbackDays: number): Promise<string> {
+    const res = await fetch('/API/engagement/caseload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // backend defaults op to create if omitted; sending op explicitly is fine too
+      body: JSON.stringify({ op: 'create', lookbackDays })
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Create job failed (HTTP ${res.status}): ${text}`);
+    }
+
+    const data = await res.json();
+    if (!data?.jobId) throw new Error('Create job failed: missing jobId');
+    return String(data.jobId);
+  }
+
+  async function stepJob(jobId: string): Promise<any> {
+    const res = await fetch('/API/engagement/caseload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'step', jobId })
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Step failed (HTTP ${res.status}): ${text}`);
+    }
+
+    return res.json();
+  }
+
+  async function fetchSummary(jobId: string) {
+    const res = await fetch(`/API/engagement/caseload?jobId=${encodeURIComponent(jobId)}&view=summary`);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Summary fetch failed (HTTP ${res.status}): ${text}`);
+    }
+    return res.json();
+  }
+
+  async function fetchAllMembers(jobId: string): Promise<CaseloadMemberRow[]> {
+    const members: CaseloadMemberRow[] = [];
+    let offset = 0;
+
+    // Your typical size (<500) means this usually completes in one request.
+    const limit = 2000;
+
+    while (true) {
+      const url =
+        `/API/engagement/caseload?jobId=${encodeURIComponent(jobId)}&view=members` +
+        `&offset=${offset}&limit=${limit}`;
+
+      const res = await fetch(url);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Members fetch failed (HTTP ${res.status}): ${text}`);
+      }
+
+      const page = await res.json();
+      const items = (page.items ?? []) as CaseloadMemberRow[];
+      members.push(...items);
+
+      if (page.nextOffset == null) break;
+      offset = Number(page.nextOffset);
+      if (!Number.isFinite(offset)) break;
+    }
+
+    return members;
+  }
+
+  async function runJobAndBuildReport(lookbackDays: number): Promise<CaseloadReport> {
+    if (activeJobId) {
+      cleanupJob(activeJobId);
+      activeJobId = null;
+    }
+
+    const jobId = await createJob(lookbackDays);
+    activeJobId = jobId;
+
+    let done = false;
+
+    while (!done) {
+      const prog = await stepJob(jobId);
+
+      // ✅ If the job failed, stop and surface the real error
+      if (prog?.status === 'error') {
+        throw new Error(`Caseload job failed: ${prog?.error ?? 'Unknown error'}`);
+      }
+      if (prog?.status === 'cancelled') {
+        throw new Error('Caseload job was cancelled.');
+      }
+
+      done = !!prog.done;
+
+      // Optional progress text
+      if (prog?.progress) {
+        const p = prog.progress;
+        progressText =
+          `Pages ${p.pagesFetched ?? 0} · conv ${p.conversationsFetched ?? 0} · ` +
+          `members ${p.uniqueMembers ?? 0} · missing contacts ${p.missingContacts ?? 0}`;
+      }
+
+      if (!done) await new Promise((r) => setTimeout(r, 150));
+    }
+
+    // ✅ At this point we expect it to be complete
+    const summaryPayload = await fetchSummary(jobId);
+    const members = await fetchAllMembers(jobId);
+
+    return {
+      lookbackDays: Number(summaryPayload.lookbackDays),
+      generatedAt: String(summaryPayload.generatedAt),
+      totalMembers: Number(summaryPayload.totalMembers ?? members.length),
+      summary: summaryPayload.summary,
+      members
+    };
+  }
+
+
+  // cleanup on destroy (best effort)
+  onDestroy(() => {
+    if (activeJobId) cleanupJob(activeJobId);
+  });
+
   /**
    * Main loader triggered by the button.
    * - No default lookback: user must supply a value.
@@ -187,6 +340,7 @@
   async function loadReport() {
     loading = true;
     error = null;
+    progressText = null;
 
     try {
       const parsed = Number(selectedLookbackDays);
@@ -206,19 +360,8 @@
         return;
       }
 
-      // Otherwise, fetch from backend with the requested window
-      const res = await fetch('/API/engagement/caseload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lookbackDays: requested })
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
-      }
-
-      const data: CaseloadReport = await res.json();
+      // Fetch from backend (job + polling), then build full report object
+      const data = await runJobAndBuildReport(requested);
 
       cachedReport = data;
       lastLoadedLookbackDays = data.lookbackDays;
@@ -231,6 +374,7 @@
       error = e?.message ?? String(e);
     } finally {
       loading = false;
+      progressText = null;
     }
   }
 
@@ -239,6 +383,7 @@
     applyFilters();
   }
 </script>
+
 
 <style>
   .page {
@@ -414,6 +559,9 @@
           Load data
         {/if}
       </button>
+      {#if progressText}
+        <div class="muted">{progressText}</div>
+      {/if}
       <div class="muted">
         Data is cached during this session; increasing the window (up to 365) may trigger a new fetch.
       </div>
