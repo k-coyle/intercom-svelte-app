@@ -21,12 +21,15 @@ const STEP_SAFETY_MS = 1_250;
 const MIN_TIME_TO_START_REQUEST_MS = 4_500;
 
 // ---- TTLs (in-memory, per job/session) ----
-const JOB_TTL_MS = 45 * 60 * 1000;
+const JOB_TTL_MS = 10 * 60 * 1000;
 const ADMIN_CACHE_TTL_MS = 10 * 60 * 1000;
 const CONTACT_CACHE_TTL_MS = 60 * 60 * 1000;
 
 // ---- Intercom constraints ----
-const CONTACT_CHUNK_SIZE = 15; // Intercom IN operator max is 15 // must be <= 15
+const CONTACTS_IN_MAX = 50; // Intercom enforces max 50 elements for IN operator
+// Use a conservative chunk size to stay well under common Intercom validation limits.
+// (IN supports up to 50, but smaller chunks can be more reliable across instances.)
+const CONTACT_CHUNK_SIZE = 15;
 // Composite query max ~15 filters; avoid OR-of-equals entirely.
 
 // Conversation attribute key for channel
@@ -101,6 +104,8 @@ interface CaseloadJobState {
 
   lookbackDays: number;
   sinceUnix: number;
+  untilUnix?: number;
+  untilLookbackDays?: number;
 
   status: JobStatus;
   phase: JobPhase;
@@ -403,14 +408,16 @@ async function fetchConversationsSearchPage(
   job: CaseloadJobState,
   deadlineMs: number
 ): Promise<{ conversations: any[]; nextCursor?: string }> {
+  const filters: any[] = [
+    { field: 'state', operator: '=', value: 'closed' },
+    { field: 'updated_at', operator: '>', value: job.sinceUnix }
+  ];
+  if (typeof job.untilUnix === 'number') {
+    filters.push({ field: 'updated_at', operator: '<', value: job.untilUnix });
+  }
+
   const body: any = {
-    query: {
-      operator: 'AND',
-      value: [
-        { field: 'state', operator: '=', value: 'closed' },
-        { field: 'updated_at', operator: '>', value: job.sinceUnix }
-      ]
-    },
+    query: { operator: 'AND', value: filters },
     pagination: { per_page: 150 }
   };
 
@@ -553,9 +560,13 @@ async function hydrateContactsByIds(
 
 
 // ---------- Job logic ----------
-function createJob(lookbackDays: number): CaseloadJobState {
+function createJob(lookbackDays: number, untilLookbackDays?: number): CaseloadJobState {
   const nowUnix = Math.floor(Date.now() / 1000);
   const sinceUnix = nowUnix - lookbackDays * SECONDS_PER_DAY;
+  const untilUnix =
+    typeof untilLookbackDays === 'number' && untilLookbackDays > 0 && untilLookbackDays < lookbackDays
+      ? nowUnix - untilLookbackDays * SECONDS_PER_DAY
+      : undefined;
   const id = randomUUID();
   const nowMs = Date.now();
 
@@ -563,6 +574,8 @@ function createJob(lookbackDays: number): CaseloadJobState {
     id,
     lookbackDays,
     sinceUnix,
+    untilUnix,
+    untilLookbackDays,
     status: 'queued',
     phase: 'conversations',
     createdAtMs: nowMs,
@@ -580,7 +593,7 @@ function createJob(lookbackDays: number): CaseloadJobState {
 
   jobs.set(id, job);
 
-  audit(id, 'job_create', { lookbackDays, sinceUnix });
+  audit(id, 'job_create', { lookbackDays, sinceUnix, untilLookbackDays: untilLookbackDays ?? null, untilUnix: untilUnix ?? null });
 
   return job;
 }
@@ -916,7 +929,6 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   const op = String(body.op ?? 'create');
-
   if (op === 'create') {
     const parsed = Number(body.lookbackDays);
     if (Number.isNaN(parsed) || parsed <= 0) {
@@ -930,10 +942,34 @@ export const POST: RequestHandler = async ({ request }) => {
     }
 
     const lookbackDays = Math.min(parsed, 365);
-    const job = createJob(lookbackDays);
+
+    // Optional: bound the upper end of the window so the client can fetch *only* the incremental delta
+    // when increasing lookbackDays (e.g., fetch updated_at between now-lookbackDays and now-untilLookbackDays).
+    const untilRaw = body.untilLookbackDays;
+    const untilLookbackDays = untilRaw == null ? undefined : Number(untilRaw);
+    if (untilLookbackDays != null) {
+      if (Number.isNaN(untilLookbackDays) || untilLookbackDays <= 0) {
+        return new Response(
+          JSON.stringify({
+            error: 'Invalid untilLookbackDays',
+            details: 'untilLookbackDays must be a positive number.'
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    const job = createJob(lookbackDays, untilLookbackDays);
 
     return new Response(
-      JSON.stringify({ jobId: job.id, status: job.status, phase: job.phase }),
+      JSON.stringify({
+        jobId: job.id,
+        status: job.status,
+        phase: job.phase,
+        lookbackDays: job.lookbackDays,
+        sinceUnix: job.sinceUnix,
+        untilUnix: job.untilUnix ?? null
+      }),
       { headers: { 'Content-Type': 'application/json' } }
     );
   }

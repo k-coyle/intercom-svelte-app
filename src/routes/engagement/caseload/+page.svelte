@@ -55,6 +55,114 @@
 
   // -------- State --------
 
+
+
+  const SECONDS_PER_DAY = 60 * 60 * 24;
+
+  function computeBuckets(daysSinceLastSession: number): MemberBuckets {
+    return {
+      bucket_1: daysSinceLastSession <= 7,
+      bucket_2: daysSinceLastSession > 7 && daysSinceLastSession <= 28,
+      bucket_3: daysSinceLastSession > 28 && daysSinceLastSession <= 56,
+      bucket_4: daysSinceLastSession > 56
+    };
+  }
+
+  function normalizeChannelCombo(channels: SessionChannel[]): string {
+    const order: SessionChannel[] = ['Phone', 'Video Conference', 'Email', 'Chat'];
+    const set = new Set(channels);
+    return order.filter((c) => set.has(c)).join(' + ') || '(none)';
+  }
+
+  /**
+   * Merge an "older window" delta report into an existing cached report.
+   * - Unions channels/coaches
+   * - Adds newly-discovered members
+   * - Recomputes derived fields (daysSince/buckets/channelCombo/summary)
+   */
+  function mergeReports(base: CaseloadReport, delta: CaseloadReport, newLookbackDays: number): CaseloadReport {
+    const nowUnix = Math.floor(Date.now() / 1000);
+
+    const byId = new Map<string, CaseloadMemberRow>();
+    const coachNameById = new Map<string, string>();
+
+    for (const m of base.members) {
+      byId.set(m.memberId, {
+        ...m,
+        coachIds: [...m.coachIds],
+        coachNames: [...m.coachNames],
+        channelsUsed: [...m.channelsUsed]
+      });
+      m.coachIds.forEach((id, i) => coachNameById.set(id, String(m.coachNames[i] ?? id)));
+    }
+
+    for (const m of delta.members) {
+      m.coachIds.forEach((id, i) => coachNameById.set(id, String(m.coachNames[i] ?? id)));
+
+      const existing = byId.get(m.memberId);
+      if (!existing) {
+        byId.set(m.memberId, {
+          ...m,
+          coachIds: [...m.coachIds],
+          coachNames: [...m.coachNames],
+          channelsUsed: [...m.channelsUsed]
+        });
+        continue;
+      }
+
+      // Prefer non-null identity fields
+      if (!existing.memberName && m.memberName) existing.memberName = m.memberName;
+      if (!existing.memberEmail && m.memberEmail) existing.memberEmail = m.memberEmail;
+      if (!existing.client && m.client) existing.client = m.client;
+
+      // Union coaches
+      existing.coachIds = Array.from(new Set([...existing.coachIds, ...m.coachIds]));
+
+      // Union channels
+      existing.channelsUsed = Array.from(new Set([...existing.channelsUsed, ...m.channelsUsed]));
+
+      // Last session is the max timestamp
+      existing.lastSessionAt = Math.max(existing.lastSessionAt, m.lastSessionAt);
+    }
+
+    // Rebuild coachNames + derived fields consistently
+    const members: CaseloadMemberRow[] = [];
+    for (const m of byId.values()) {
+      // Stable coach names aligned to coachIds
+      const coachIds = [...m.coachIds];
+      const coachNames = coachIds.map((id) => coachNameById.get(id) ?? id);
+
+      const daysSinceLastSession = (nowUnix - m.lastSessionAt) / SECONDS_PER_DAY;
+      const buckets = computeBuckets(daysSinceLastSession);
+      const channelCombo = normalizeChannelCombo(m.channelsUsed);
+
+      members.push({
+        ...m,
+        coachIds,
+        coachNames,
+        daysSinceLastSession,
+        buckets,
+        channelCombo
+      });
+    }
+
+    const summary: CaseloadSummary = { bucket_1: 0, bucket_2: 0, bucket_3: 0, bucket_4: 0 };
+    for (const m of members) {
+      if (m.buckets.bucket_1) summary.bucket_1 += 1;
+      if (m.buckets.bucket_2) summary.bucket_2 += 1;
+      if (m.buckets.bucket_3) summary.bucket_3 += 1;
+      if (m.buckets.bucket_4) summary.bucket_4 += 1;
+    }
+
+    return {
+      lookbackDays: newLookbackDays,
+      generatedAt: new Date().toISOString(),
+      totalMembers: members.length,
+      summary,
+      members
+    };
+  }
+
   // Active report currently being used for display
   let report: CaseloadReport | null = null;
 
@@ -205,12 +313,12 @@
     }
   }
 
-  async function createJob(lookbackDays: number): Promise<string> {
+  async function createJob(lookbackDays: number, untilLookbackDays?: number): Promise<string> {
     const res = await fetch('/API/engagement/caseload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // backend defaults op to create if omitted; sending op explicitly is fine too
-      body: JSON.stringify({ op: 'create', lookbackDays })
+      body: JSON.stringify({ op: 'create', lookbackDays, untilLookbackDays })
     });
 
     if (!res.ok) {
@@ -277,55 +385,70 @@
     return members;
   }
 
-  async function runJobAndBuildReport(lookbackDays: number): Promise<CaseloadReport> {
+  async function runJobAndBuildReport(lookbackDays: number, untilLookbackDays?: number): Promise<CaseloadReport> {
+    // If there is a stray active job from prior attempts, clean it up.
     if (activeJobId) {
       cleanupJob(activeJobId);
       activeJobId = null;
     }
 
-    const jobId = await createJob(lookbackDays);
+    const jobId = await createJob(lookbackDays, untilLookbackDays);
     activeJobId = jobId;
 
-    let done = false;
+    try {
+      let done = false;
 
-    while (!done) {
-      const prog = await stepJob(jobId);
+      while (!done) {
+        const prog = await stepJob(jobId);
 
-      // ✅ If the job failed, stop and surface the real error
-      if (prog?.status === 'error') {
-        throw new Error(`Caseload job failed: ${prog?.error ?? 'Unknown error'}`);
+        // If the job failed, stop and surface the real error
+        if (prog?.status === 'error') {
+          throw new Error(`Caseload job failed: ${prog?.error ?? 'Unknown error'}`);
+        }
+        if (prog?.status === 'cancelled') {
+          throw new Error('Caseload job was cancelled.');
+        }
+
+        done = !!prog.done;
+
+        // Optional progress text
+        if (prog?.progress) {
+          const p = prog.progress;
+          progressText =
+            `Pages ${p.pagesFetched ?? 0} · conv ${p.conversationsFetched ?? 0} · ` +
+            `members ${p.uniqueMembers ?? 0} · missing contacts ${p.missingContacts ?? 0}`;
+        }
+
+        if (!done) await new Promise((r) => setTimeout(r, 150));
       }
-      if (prog?.status === 'cancelled') {
-        throw new Error('Caseload job was cancelled.');
-      }
 
-      done = !!prog.done;
+      // At this point we expect it to be complete
+      const summaryPayload = await fetchSummary(jobId);
+      const members = await fetchAllMembers(jobId);
 
-      // Optional progress text
-      if (prog?.progress) {
-        const p = prog.progress;
-        progressText =
-          `Pages ${p.pagesFetched ?? 0} · conv ${p.conversationsFetched ?? 0} · ` +
-          `members ${p.uniqueMembers ?? 0} · missing contacts ${p.missingContacts ?? 0}`;
-      }
-
-      if (!done) await new Promise((r) => setTimeout(r, 150));
+      return {
+        lookbackDays: Number(summaryPayload.lookbackDays),
+        generatedAt: String(summaryPayload.generatedAt),
+        totalMembers: Number(summaryPayload.totalMembers ?? members.length),
+        summary: summaryPayload.summary,
+        members
+      };
+    } finally {
+      // Ensure backend job memory is released once we've built the report.
+      cleanupJob(jobId);
+      if (activeJobId === jobId) activeJobId = null;
     }
-
-    // ✅ At this point we expect it to be complete
-    const summaryPayload = await fetchSummary(jobId);
-    const members = await fetchAllMembers(jobId);
-
-    return {
-      lookbackDays: Number(summaryPayload.lookbackDays),
-      generatedAt: String(summaryPayload.generatedAt),
-      totalMembers: Number(summaryPayload.totalMembers ?? members.length),
-      summary: summaryPayload.summary,
-      members
-    };
   }
 
 
+
+
+  // best-effort cleanup on tab close / refresh
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', () => {
+      if (activeJobId) cleanupJob(activeJobId);
+    });
+  }
   // cleanup on destroy (best effort)
   onDestroy(() => {
     if (activeJobId) cleanupJob(activeJobId);
@@ -360,15 +483,33 @@
         return;
       }
 
-      // Fetch from backend (job + polling), then build full report object
+      // If we already have data loaded this session and the user increases the window,
+      // fetch ONLY the additional older slice and merge into the frontend cache.
+      if (cachedReport && lastLoadedLookbackDays !== null && requested > lastLoadedLookbackDays) {
+        progressText = `Fetching additional data for days ${lastLoadedLookbackDays} → ${requested}…`;
+
+        const delta = await runJobAndBuildReport(requested, lastLoadedLookbackDays);
+        const merged = mergeReports(cachedReport, delta, requested);
+
+        cachedReport = merged;
+        lastLoadedLookbackDays = requested;
+        report = merged;
+
+        buildDerivedFilters();
+        applyFilters();
+        return;
+      }
+
+      // Otherwise, fetch the full window from backend (job + polling), then cache it in-memory.
       const data = await runJobAndBuildReport(requested);
 
       cachedReport = data;
-      lastLoadedLookbackDays = data.lookbackDays;
+      lastLoadedLookbackDays = requested;
       report = data;
 
       buildDerivedFilters();
       applyFilters();
+
     } catch (e: any) {
       console.error(e);
       error = e?.message ?? String(e);

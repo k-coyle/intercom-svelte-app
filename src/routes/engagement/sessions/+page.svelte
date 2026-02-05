@@ -1,5 +1,8 @@
 <!-- src/routes/engagement/sessions/+page.svelte -->
 <script lang="ts">
+  import { onDestroy, onMount } from 'svelte';
+  import { browser } from '$app/environment';
+
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
 
   interface SessionDetailRow {
@@ -10,50 +13,23 @@
     coachId: string | null;
     coachName: string | null;
     channel: SessionChannel;
-    time: number;      // unix seconds
-    daysSince: number; // days since session at time of report generation
+    time: number; // unix seconds
+    // backend may include daysSince; we recompute live in UI
+    daysSince?: number;
   }
 
-  interface MemberBuckets {
-    // Aligned with backend:
-    // bucket_1:  daysSince <= 7
-    // bucket_2:  7 < daysSince <= 28
-    // bucket_3:  28 < daysSince <= 56
-    // bucket_4:  daysSince > 56
-    bucket_1: boolean;
-    bucket_2: boolean;
-    bucket_3: boolean;
-    bucket_4: boolean;
-  }
-
-  interface CaseloadSummary {
-    bucket_1: number;
-    bucket_2: number;
-    bucket_3: number;
-    bucket_4: number;
-  }
-
-  interface CaseloadMemberRow {
-    memberId: string;
-    memberName: string | null;
-    memberEmail: string | null;
-    client: string | null;
-    coachIds: string[];
-    coachNames: string[];
-    channelsUsed: SessionChannel[];
-    channelCombo: string;
-    lastSessionAt: number;
-    daysSinceLastSession: number;
-    buckets: MemberBuckets;
-  }
-
-  interface CaseloadReport {
+  interface SessionsSummary {
     lookbackDays: number;
     generatedAt: string;
-    totalMembers: number;
-    summary: CaseloadSummary;
-    members: CaseloadMemberRow[];
+    totalSessions: number;
+    uniqueMembers: number;
+  }
+
+  interface SessionsReport {
+    lookbackDays: number;     // max loaded (cached) window
+    generatedAt: string;      // time of last load/append
     sessions: SessionDetailRow[];
+    summary: SessionsSummary;
   }
 
   interface CoachOption {
@@ -61,20 +37,21 @@
     name: string;
   }
 
-  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  // -------- State --------
+  let report: SessionsReport | null = null;
 
-  // Active report for this page
-  let report: CaseloadReport | null = null;
-
-  // Cached report in memory for this browser session
-  let cachedReport: CaseloadReport | null = null;
+  // Browser-session cache (clean slate on refresh/tab close)
+  let cachedReport: SessionsReport | null = null;
   let lastLoadedLookbackDays: number | null = null;
-  let effectiveLookbackDays: number | null = null;
 
   let loading = false;
   let error: string | null = null;
+  let progressText: string | null = null;
 
-  // Controls
+  // Track the server-side job (ephemeral; we clean up ASAP)
+  let activeJobId: string | null = null;
+
+  // Filters
   let selectedLookbackDays: string = ''; // user must set before first load
   let selectedCoachId = '';
   let selectedClient = '';
@@ -86,27 +63,27 @@
     Chat: true
   };
 
-  // Custom date range (for the "adjustable date range" metric)
-  let rangeStart = ''; // 'YYYY-MM-DD'
-  let rangeEnd = '';   // 'YYYY-MM-DD'
-
-  // Derived filters
+  // Derived filter options
   let uniqueCoaches: CoachOption[] = [];
   let uniqueClients: string[] = [];
 
-  // Sessions to display after coach/client/channel filters
+  // Display data
   let filteredSessions: SessionDetailRow[] = [];
+  const SECONDS_PER_DAY = 24 * 60 * 60;
 
-  // Sessions after ALL filters (including custom date range)
-  let visibleSessions: SessionDetailRow[] = [];
+  function nowUnix(): number {
+    return Math.floor(Date.now() / 1000);
+  }
 
-  // Metrics
-  let totalLast8Days = 0;
-  let totalLast30Days = 0;
-  let totalLast60Days = 0;
-  let totalInCustomRange = 0;
+  function daysSince(timeUnix: number): number {
+    return (nowUnix() - timeUnix) / SECONDS_PER_DAY;
+  }
 
-  function buildDerivedFiltersFrom(source: CaseloadReport | null) {
+  function getSelectedChannels(): SessionChannel[] {
+    return allChannels.filter((ch) => selectedChannels[ch]);
+  }
+
+  function buildDerivedFiltersFrom(source: SessionsReport | null) {
     if (!source) return;
 
     const coachMap = new Map<string, string>();
@@ -115,13 +92,9 @@
     for (const s of source.sessions) {
       if (s.coachId) {
         const name = String(s.coachName ?? s.coachId);
-        if (!coachMap.has(s.coachId)) {
-          coachMap.set(s.coachId, name);
-        }
+        if (!coachMap.has(s.coachId)) coachMap.set(s.coachId, name);
       }
-      if (s.client != null) {
-        clientSet.add(String(s.client));
-      }
+      if (s.client != null) clientSet.add(String(s.client));
     }
 
     uniqueCoaches = Array.from(coachMap.entries())
@@ -131,122 +104,170 @@
     uniqueClients = Array.from(clientSet).sort();
   }
 
-  function ensureRangeDefaults() {
-    if (!report) return;
-
-    // Use the report's generation time as the "today" anchor
-    const generated = new Date(report.generatedAt);
-    if (Number.isNaN(generated.getTime())) {
-      // Fallback: use min/max session times if generatedAt is weird
-      if (!report.sessions.length) return;
-      const timesMs = report.sessions.map((s) => s.time * 1000);
-      const minMs = Math.min(...timesMs);
-      const maxMs = Math.max(...timesMs);
-      rangeStart = toDateInputValue(new Date(minMs));
-      rangeEnd = toDateInputValue(new Date(maxMs));
-      return;
-    }
-
-    const endDate = generated;
-
-    // Inclusive window: e.g. lookbackDays=30 -> 30 calendar days including endDate
-    const startMs = endDate.getTime() - (report.lookbackDays - 1) * MS_PER_DAY;
-    const startDate = new Date(startMs);
-
-    rangeStart = toDateInputValue(startDate);
-    rangeEnd = toDateInputValue(endDate);
-  }
-
-  function toDateInputValue(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-
-  function applyFiltersAndMetrics() {
+  function applyFilters() {
     if (!report) {
       filteredSessions = [];
-      totalLast8Days = totalLast30Days = totalLast60Days = totalInCustomRange = 0;
       return;
     }
 
     let sessions = report.sessions;
 
-    // Optional "effective" lookback filter on top of the raw report
-    if (effectiveLookbackDays != null) {
-      sessions = sessions.filter((s) => s.daysSince <= effectiveLookbackDays!);
-    }
-
-    // Coach filter
+    // Coach
     if (selectedCoachId) {
       sessions = sessions.filter((s) => s.coachId === selectedCoachId);
     }
 
-    // Client filter
+    // Client
     if (selectedClient) {
       sessions = sessions.filter((s) => s.client === selectedClient);
     }
 
-    // Channel filter
-    const activeChannels = new Set(
-      allChannels.filter((ch) => selectedChannels[ch])
-    );
-    if (activeChannels.size > 0 && activeChannels.size < allChannels.length) {
-      sessions = sessions.filter((s) => activeChannels.has(s.channel));
+    // Channel
+    const selected = new Set(getSelectedChannels());
+    if (selected.size > 0 && selected.size < allChannels.length) {
+      sessions = sessions.filter((s) => selected.has(s.channel));
     }
 
-    filteredSessions = sessions;
-
-    // Apply custom date range as a real filter (so table + metrics react)
-    let minMs = -Infinity;
-    let maxMs = Infinity;
-
-    if (rangeStart) {
-      const d = new Date(rangeStart);
-      if (!Number.isNaN(d.getTime())) {
-        minMs = d.getTime();
-      }
+    // Lookback filter (view-level)
+    const lookback = Number(selectedLookbackDays);
+    if (!Number.isNaN(lookback) && lookback > 0 && lookback <= 365) {
+      sessions = sessions.filter((s) => daysSince(s.time) <= lookback);
     }
 
-    if (rangeEnd) {
-      const d = new Date(rangeEnd);
-      if (!Number.isNaN(d.getTime())) {
-        // inclusive end-of-day
-        maxMs = d.getTime() + MS_PER_DAY - 1;
-      }
-    }
-
-    visibleSessions = filteredSessions.filter((s) => {
-      const ms = s.time * 1000;
-      return ms >= minMs && ms <= maxMs;
-    });
-
-    // Metrics from visibleSessions
-    totalInCustomRange = visibleSessions.length;
-
-    // NOTE: These now match the global bucket logic:
-    //  - ≤7 days
-    //  - 8–28 days
-    //  - 29–56 days
-    totalLast8Days = visibleSessions.filter((s) => s.daysSince <= 7).length;
-    totalLast30Days = visibleSessions.filter(
-      (s) => s.daysSince > 7 && s.daysSince <= 28
-    ).length;
-    totalLast60Days = visibleSessions.filter(
-      (s) => s.daysSince > 28 && s.daysSince <= 56
-    ).length;
+    // Sort newest first
+    filteredSessions = sessions.slice().sort((a, b) => b.time - a.time);
   }
 
-  /**
-   * Main loader triggered by the button.
-   * - uses lookbackDays only to control how far back we fetch
-   * - no default; user must provide it
-   * - cache is reused if requested ≤ lastLoadedLookbackDays
-   */
+  $: if (report) {
+    applyFilters();
+  }
+
+  // -------- Backend helpers (job + polling) --------
+
+  async function createJob(lookbackDays: number, untilLookbackDays?: number | null): Promise<string> {
+    const body: any = { op: 'create', lookbackDays };
+
+    // Delta mode (optional): only fetch older slice when increasing lookback
+    if (untilLookbackDays != null && untilLookbackDays > 0) {
+      body.untilLookbackDays = untilLookbackDays;
+    }
+
+    const res = await fetch('/API/engagement/caseload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Create job failed (HTTP ${res.status}): ${text}`);
+    }
+
+    const json = await res.json();
+    const jobId = String(json.jobId ?? '');
+    if (!jobId) throw new Error('Create job failed: missing jobId');
+    return jobId;
+  }
+
+  async function stepJob(jobId: string): Promise<any> {
+    const res = await fetch('/API/engagement/caseload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'step', jobId })
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Step failed (HTTP ${res.status}): ${text}`);
+    }
+
+    return res.json();
+  }
+
+  async function cleanupJob(jobId: string) {
+    try {
+      await fetch('/API/engagement/caseload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: 'cleanup', jobId })
+      });
+    } catch {
+      // best-effort
+    }
+  }
+
+  async function fetchAllSessions(jobId: string, limit = 500): Promise<SessionDetailRow[]> {
+    let offset = 0;
+    let all: SessionDetailRow[] = [];
+
+    while (true) {
+      const url = `/API/engagement/caseload?jobId=${encodeURIComponent(jobId)}&view=sessions&offset=${offset}&limit=${limit}`;
+      const res = await fetch(url);
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Sessions fetch failed (HTTP ${res.status}): ${text}`);
+      }
+
+      const json = await res.json();
+      const items: SessionDetailRow[] = json.items ?? json.data ?? [];
+      all = all.concat(items);
+
+      const nextOffset = json.nextOffset;
+      progressText = `Loaded sessions: ${all.length}${json.total ? ` / ${json.total}` : ''}`;
+
+      if (nextOffset == null) break;
+      offset = Number(nextOffset);
+    }
+
+    return all;
+  }
+
+  function sessionKey(s: SessionDetailRow): string {
+    // Stable-ish unique key (avoid PHI). Assumes same user/session/time shouldn't duplicate.
+    return `${s.memberId}|${s.coachId ?? ''}|${s.channel}|${s.time}`;
+  }
+
+  function mergeSessions(existing: SessionDetailRow[], incoming: SessionDetailRow[]): SessionDetailRow[] {
+    const map = new Map<string, SessionDetailRow>();
+    for (const s of existing) map.set(sessionKey(s), s);
+    for (const s of incoming) {
+      const k = sessionKey(s);
+      if (!map.has(k)) {
+        map.set(k, s);
+      } else {
+        // If the old record was missing fields, fill them in
+        const prev = map.get(k)!;
+        map.set(k, {
+          ...prev,
+          ...s,
+          memberName: prev.memberName ?? s.memberName ?? null,
+          memberEmail: prev.memberEmail ?? s.memberEmail ?? null,
+          client: prev.client ?? s.client ?? null,
+          coachName: prev.coachName ?? s.coachName ?? null
+        });
+      }
+    }
+    return Array.from(map.values());
+  }
+
+  function computeSummary(lookbackDays: number, sessions: SessionDetailRow[]): SessionsSummary {
+    const members = new Set<string>();
+    for (const s of sessions) members.add(s.memberId);
+
+    return {
+      lookbackDays,
+      generatedAt: new Date().toISOString(),
+      totalSessions: sessions.length,
+      uniqueMembers: members.size
+    };
+  }
+
+  // -------- Main loader --------
   async function loadReport() {
     loading = true;
     error = null;
+    progressText = null;
 
     try {
       const parsed = Number(selectedLookbackDays);
@@ -258,70 +279,121 @@
       if (requested > 365) requested = 365;
       selectedLookbackDays = String(requested);
 
-      // Always update the active lookback filter
-      effectiveLookbackDays = requested;
-
-      // Reuse cached data if we already loaded a larger/equal window
+      // If we already loaded a larger/equal window in this browser session, no backend call.
       if (cachedReport && lastLoadedLookbackDays !== null && requested <= lastLoadedLookbackDays) {
         report = cachedReport;
-        ensureRangeDefaults();
         buildDerivedFiltersFrom(report);
+        applyFilters();
         return;
       }
 
-      const res = await fetch('/API/engagement/caseload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lookbackDays: requested })
-      });
+      // If we have a cache and we are increasing lookback, fetch ONLY the delta window server-side,
+      // then append/merge into the browser cache.
+      const until = lastLoadedLookbackDays; // may be null on first load
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
+      // Clean up any prior in-flight job
+      if (activeJobId) {
+        await cleanupJob(activeJobId);
+        activeJobId = null;
       }
 
-      const data: CaseloadReport = await res.json();
+      const jobId = await createJob(requested, until);
+      activeJobId = jobId;
 
-      cachedReport = data;
-      lastLoadedLookbackDays = data.lookbackDays;
-      report = data;
+      // Poll / step until complete
+      while (true) {
+        const prog = await stepJob(jobId);
 
-      ensureRangeDefaults();
+        if (prog?.status === 'error') {
+          throw new Error(String(prog?.error ?? 'Job failed'));
+        }
+        if (prog?.status === 'cancelled') {
+          throw new Error('Job cancelled');
+        }
+
+        // progress text (best-effort)
+        if (prog?.progress) {
+          const p = prog.progress;
+          progressText =
+            `Phase: ${prog.phase} · Pages ${p.pagesFetched ?? 0} · ` +
+            `Sessions ${p.sessionsCount ?? p.sessionsFetched ?? 0} · ` +
+            `Members ${p.uniqueMembers ?? 0}`;
+        } else {
+          progressText = `Phase: ${prog?.phase ?? 'running'}…`;
+        }
+
+        const done = !!prog?.done || prog?.status === 'complete' || prog?.phase === 'complete';
+        if (done) break;
+
+        await new Promise((r) => setTimeout(r, 150));
+      }
+
+      // Fetch sessions view pages
+      const newSessions = await fetchAllSessions(jobId, 750);
+
+      // Merge with existing cached data (append behavior on increases)
+      let merged: SessionDetailRow[];
+      if (cachedReport?.sessions?.length) {
+        merged = mergeSessions(cachedReport.sessions, newSessions);
+      } else {
+        merged = newSessions;
+      }
+
+      // Update cache (store the max loaded window)
+      const generatedAt = new Date().toISOString();
+      const summary = computeSummary(requested, merged);
+
+      cachedReport = {
+        lookbackDays: requested,
+        generatedAt,
+        sessions: merged,
+        summary
+      };
+      lastLoadedLookbackDays = requested;
+      report = cachedReport;
+
       buildDerivedFiltersFrom(report);
+      applyFilters();
     } catch (e: any) {
       console.error(e);
       error = e?.message ?? String(e);
     } finally {
       loading = false;
-    }
-  }
 
-  // Recompute whenever report or any filter control changes
-  $: if (report) {
-    report;
-    selectedCoachId;
-    selectedClient;
-    selectedChannels;
-    rangeStart;
-    rangeEnd;
-    effectiveLookbackDays;
-
-    applyFiltersAndMetrics();
-  }
-
-  // Keep the numeric lookback field in sync when the user adjusts the custom date range
-  $: if (report && rangeStart && rangeEnd) {
-    const start = new Date(rangeStart);
-    const end = new Date(rangeEnd);
-
-    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-      const diffMs = end.getTime() - start.getTime();
-      if (diffMs >= 0) {
-        const days = Math.floor(diffMs / MS_PER_DAY) + 1; // inclusive
-        selectedLookbackDays = String(days);
+      // Always cleanup server job state ASAP so Node isn't acting as a cache
+      if (activeJobId) {
+        await cleanupJob(activeJobId);
+        activeJobId = null;
       }
+
+      progressText = null;
     }
   }
+
+  // Best-effort cleanup on tab close / refresh
+  function beaconCleanup() {
+    if (!activeJobId) return;
+    if (!browser) return;
+    try {
+      const payload = JSON.stringify({ op: 'cleanup', jobId: activeJobId });
+      navigator.sendBeacon('/API/engagement/caseload', payload);
+    } catch {
+      // ignore
+    }
+  }
+
+  onMount(() => {
+    if (browser) {
+      window.addEventListener('beforeunload', beaconCleanup);
+    }
+  });
+
+  onDestroy(() => {
+    if (browser) {
+      window.removeEventListener('beforeunload', beaconCleanup);
+      beaconCleanup();
+    }
+  });
 </script>
 
 <style>
@@ -340,12 +412,6 @@
   .subtitle {
     color: #666;
     font-size: 0.9rem;
-    margin-bottom: 0.35rem;
-  }
-
-  .subtitle-details {
-    color: #888;
-    font-size: 0.8rem;
     margin-bottom: 1rem;
   }
 
@@ -374,8 +440,7 @@
   }
 
   select,
-  input[type='number'],
-  input[type='date'] {
+  input[type='number'] {
     padding: 0.35rem 0.5rem;
     border-radius: 0.25rem;
     border: 1px solid #ccc;
@@ -409,39 +474,14 @@
     cursor: default;
   }
 
-  .metrics {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .metric-card {
-    padding: 0.75rem 0.9rem;
-    border-radius: 0.5rem;
-    border: 1px solid #ddd;
-    background: #fafafa;
-  }
-
-  .metric-label {
-    font-size: 0.8rem;
-    color: #555;
-    margin-bottom: 0.25rem;
-  }
-
-  .metric-value {
-    font-size: 1.2rem;
-    font-weight: 600;
+  .error {
+    color: #b00020;
+    margin-bottom: 1rem;
   }
 
   .muted {
     color: #777;
     font-size: 0.8rem;
-  }
-
-  .error {
-    color: #b00020;
-    margin-bottom: 1rem;
   }
 
   table {
@@ -456,6 +496,7 @@
     padding: 0.5rem 0.6rem;
     border: 1px solid #ddd;
     text-align: left;
+    vertical-align: top;
   }
 
   thead {
@@ -470,17 +511,14 @@
     font-size: 0.75rem;
     margin-right: 0.25rem;
     margin-bottom: 0.1rem;
+    white-space: nowrap;
   }
 </style>
 
 <div class="page">
-  <h1>Coaching Sessions Report</h1>
+  <h1>Sessions Dashboard</h1>
   <div class="subtitle">
-    Total coaching sessions by time window, coach, client, and channel.
-  </div>
-  <div class="subtitle-details">
-    A “session” here is a closed conversation where the Channel attribute is
-    Phone, Video Conference, Email, or Chat (matching the caseload backend).
+    Coaching sessions (closed conversations) by <strong>coach</strong>, <strong>client</strong>, and <strong>channel</strong>.
   </div>
 
   {#if error}
@@ -489,14 +527,8 @@
 
   <div class="filters">
     <div class="filter-group">
-      <label for="lookback">Lookback window for data (days, max 365)</label>
-      <input
-        id="lookback"
-        type="number"
-        min="1"
-        max="365"
-        bind:value={selectedLookbackDays}
-      />
+      <label for="lookback">Lookback window (days, max 365)</label>
+      <input id="lookback" type="number" min="1" max="365" bind:value={selectedLookbackDays} />
       <button class="reload" on:click={loadReport} disabled={loading}>
         {#if loading}
           Loading…
@@ -506,9 +538,13 @@
           Load data
         {/if}
       </button>
-      <div class="muted">
-        This controls how far back we load sessions from the database.
-      </div>
+      {#if progressText}
+        <div class="muted">{progressText}</div>
+      {:else}
+        <div class="muted">
+          Data is cached in this browser session; increasing the window appends older sessions to the cache.
+        </div>
+      {/if}
     </div>
 
     <div class="filter-group">
@@ -536,27 +572,13 @@
       <div class="channel-checkboxes">
         {#each allChannels as ch}
           <label>
-            <input
-              type="checkbox"
-              bind:checked={selectedChannels[ch]}
-            />
+            <input type="checkbox" bind:checked={selectedChannels[ch]} />
             {ch}
           </label>
         {/each}
       </div>
       <div class="muted">
-        Session must match one of the selected channels.
-      </div>
-    </div>
-
-    <div class="filter-group">
-      <label>Custom date range (for "total sessions" metric)</label>
-      <div>
-        <input type="date" bind:value={rangeStart} />
-        <input type="date" bind:value={rangeEnd} style="margin-left: 0.25rem;" />
-      </div>
-      <div class="muted">
-        Defaults to full loaded window. Adjust to see total sessions in any range.
+        Session is included if its channel is selected.
       </div>
     </div>
   </div>
@@ -564,60 +586,41 @@
   {#if loading && !report}
     <p>Loading sessions…</p>
   {:else if report}
-    <div class="metrics">
-      <div class="metric-card">
-        <div class="metric-label">Sessions last ≤ 7 days</div>
-        <div class="metric-value">{totalLast8Days}</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Sessions last 8–28 days</div>
-        <div class="metric-value">{totalLast30Days}</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Sessions last 29–56 days</div>
-        <div class="metric-value">{totalLast60Days}</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Sessions in custom date range</div>
-        <div class="metric-value">{totalInCustomRange}</div>
-        <div class="muted">
-          Range: {rangeStart || 'min'} → {rangeEnd || 'max'}
-        </div>
-      </div>
+    <div class="muted" style="margin-bottom: 0.75rem;">
+      Generated at {new Date(report.generatedAt).toLocaleString()} · Cached lookback = {report.lookbackDays} days ·
+      Sessions cached: {report.summary.totalSessions} · Unique members: {report.summary.uniqueMembers}
     </div>
 
-    <p class="muted">
-      Loaded {report.sessions.length} sessions in the last {report.lookbackDays} days
-      (before filters). Showing {visibleSessions.length} after filters.
-    </p>
-
-    <h2>Sessions (filtered)</h2>
     <table>
       <thead>
         <tr>
           <th>Date</th>
+          <th>Channel</th>
+          <th>Coach</th>
           <th>Member</th>
           <th>Client</th>
-          <th>Coach</th>
-          <th>Channel</th>
           <th>Days since</th>
         </tr>
       </thead>
       <tbody>
-        {#each visibleSessions.slice(0, 500) as s}
+        {#each filteredSessions.slice(0, 2000) as s}
           <tr>
             <td>{new Date(s.time * 1000).toLocaleString()}</td>
+            <td><span class="pill">{s.channel}</span></td>
+            <td>{s.coachName || s.coachId || '—'}</td>
             <td>
               {s.memberName || '(no name)'}
-              <div class="muted">{s.memberEmail}</div>
+              <div class="muted">{s.memberEmail || ''}</div>
             </td>
             <td>{s.client || '—'}</td>
-            <td>{s.coachName || s.coachId || 'Unassigned'}</td>
-            <td><span class="pill">{s.channel}</span></td>
-            <td>{s.daysSince.toFixed(1)}</td>
+            <td>{daysSince(s.time).toFixed(1)}</td>
           </tr>
         {/each}
       </tbody>
     </table>
+
+    {#if filteredSessions.length > 2000}
+      <div class="muted">Showing first 2000 sessions (of {filteredSessions.length}). Add filters to narrow.</div>
+    {/if}
   {/if}
 </div>
