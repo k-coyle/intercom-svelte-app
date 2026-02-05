@@ -13,7 +13,7 @@ const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 // Custom attribute keys in Intercom
 const ATTR_USER_ID = 'User ID';
 const ATTR_NAME = 'Name';
-const ATTR_DOB = 'Date of Birth';
+const ATTR_DOB = 'Date of birth';
 const ATTR_EMPLOYER = 'Employer';
 const ATTR_LAST_SESSION = 'Last Coaching Session';
 const ATTR_ENGAGEMENT_STATUS = 'Engagement Status';
