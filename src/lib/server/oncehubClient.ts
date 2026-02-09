@@ -1,7 +1,7 @@
 // src/lib/server/oncehubClient.ts
 import { ONCEHUB_API_KEY, ONCEHUB_API_BASE } from '$env/static/private';
 
-const ONCEHUB_BASE_URL = ONCEHUB_API_BASE || 'https://api.oncehub.com';
+const ONCEHUB_BASE_URL = ONCEHUB_API_BASE || 'https://api.oncehub.com/v2';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_RETRIES = 3;
 
@@ -39,7 +39,9 @@ function assertConfigured() {
 }
 
 function buildUrl(path: string, query?: FetchOnceHubOptions['query']): string {
-  const url = new URL(path.startsWith('/') ? path : `/${path}`, ONCEHUB_BASE_URL);
+  const base = ONCEHUB_BASE_URL.endsWith('/') ? ONCEHUB_BASE_URL : `${ONCEHUB_BASE_URL}/`;
+  const cleanPath = path.replace(/^\/+/, '');
+  const url = new URL(cleanPath, base);
 
   if (query) {
     for (const [k, v] of Object.entries(query)) {
@@ -54,9 +56,6 @@ function buildUrl(path: string, query?: FetchOnceHubOptions['query']): string {
 function parseLinkHeader(linkHeader: string | null): OnceHubLinks | undefined {
   if (!linkHeader) return undefined;
 
-  // Example:
-  // Link: <https://api.oncehub.com/bookings?after=...&limit=10>; rel="next",
-  //       <https://api.oncehub.com/bookings?before=...&limit=10>; rel="previous"
   const links: OnceHubLinks = {};
 
   for (const part of linkHeader.split(',')) {
