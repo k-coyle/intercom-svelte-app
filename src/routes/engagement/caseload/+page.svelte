@@ -179,6 +179,10 @@
   // Track the server-side job for cleanup
   let activeJobId: string | null = null;
 
+  // Prevent parallel loads in a single tab
+  let runController: AbortController | null = null;
+
+
   // Filters
   let selectedLookbackDays: string = ''; // user must set this before first load
   let selectedCoachId = '';
@@ -385,23 +389,32 @@
     return members;
   }
 
-  async function runJobAndBuildReport(lookbackDays: number, untilLookbackDays?: number): Promise<CaseloadReport> {
-    // If there is a stray active job from prior attempts, clean it up.
-    if (activeJobId) {
-      cleanupJob(activeJobId);
-      activeJobId = null;
+  async function runJobAndBuildReport(
+    lookbackDays: number,
+    untilLookbackDays?: number,
+    signal?: AbortSignal
+  ): Promise<CaseloadReport> {
+    // 1) Clean up any prior job, but do it safely + await it.
+    //    (capture into a local var so it can't shift under us)
+    const previousJobId = activeJobId;
+    activeJobId = null;
+
+    if (previousJobId) {
+      await cleanupJob(previousJobId);
     }
 
-    const jobId = await createJob(lookbackDays, untilLookbackDays);
-    activeJobId = jobId;
+    // 2) Track THIS run's jobId locally so we never accidentally clean up a newer run.
+    let myJobId: string | null = null;
 
     try {
+      myJobId = await createJob(lookbackDays, untilLookbackDays);
+      activeJobId = myJobId;
+
       let done = false;
 
       while (!done) {
-        const prog = await stepJob(jobId);
+        const prog = await stepJob(myJobId);
 
-        // If the job failed, stop and surface the real error
         if (prog?.status === 'error') {
           throw new Error(`Caseload job failed: ${prog?.error ?? 'Unknown error'}`);
         }
@@ -411,7 +424,6 @@
 
         done = !!prog.done;
 
-        // Optional progress text
         if (prog?.progress) {
           const p = prog.progress;
           progressText =
@@ -422,9 +434,8 @@
         if (!done) await new Promise((r) => setTimeout(r, 150));
       }
 
-      // At this point we expect it to be complete
-      const summaryPayload = await fetchSummary(jobId);
-      const members = await fetchAllMembers(jobId);
+      const summaryPayload = await fetchSummary(myJobId);
+      const members = await fetchAllMembers(myJobId);
 
       return {
         lookbackDays: Number(summaryPayload.lookbackDays),
@@ -434,11 +445,16 @@
         members
       };
     } finally {
-      // Ensure backend job memory is released once we've built the report.
-      cleanupJob(jobId);
-      if (activeJobId === jobId) activeJobId = null;
+      // 3) Always clean up *this run's* job, and await it.
+      if (myJobId) {
+        await cleanupJob(myJobId);
+      }
+
+      // 4) Only clear activeJobId if it still points at *this* job
+      if (activeJobId === myJobId) activeJobId = null;
     }
   }
+
 
 
 
@@ -465,6 +481,16 @@
     error = null;
     progressText = null;
 
+    // Per-run controller so we can cancel any previous run in this tab
+    const myController = new AbortController();
+    const signal = myController.signal;
+
+    // If another run is in-flight, abort it first (prevents parallel stepping / floods)
+    if (runController) {
+      runController.abort();
+    }
+    runController = myController;
+
     try {
       const parsed = Number(selectedLookbackDays);
       if (Number.isNaN(parsed) || parsed <= 0) {
@@ -475,7 +501,7 @@
       if (requested > 365) requested = 365; // hard cap
       selectedLookbackDays = String(requested);
 
-      // Reuse cached data if we already loaded a larger/equal window this session
+      // If we already loaded a larger/equal window this session, reuse cache (no backend call).
       if (cachedReport && lastLoadedLookbackDays !== null && requested <= lastLoadedLookbackDays) {
         report = cachedReport;
         buildDerivedFilters();
@@ -483,12 +509,19 @@
         return;
       }
 
-      // If we already have data loaded this session and the user increases the window,
-      // fetch ONLY the additional older slice and merge into the frontend cache.
+      // IMPORTANT: before starting a new job, clean up any prior jobId we were tracking
+      // (avoids backend holding onto old job state)
+      const prevJobId = activeJobId;
+      activeJobId = null;
+      if (prevJobId) {
+        await cleanupJob(prevJobId);
+      }
+
+      // If user increases lookback, fetch ONLY the delta (older slice) and merge into frontend cache.
       if (cachedReport && lastLoadedLookbackDays !== null && requested > lastLoadedLookbackDays) {
         progressText = `Fetching additional data for days ${lastLoadedLookbackDays} → ${requested}…`;
 
-        const delta = await runJobAndBuildReport(requested, lastLoadedLookbackDays);
+        const delta = await runJobAndBuildReport(requested, lastLoadedLookbackDays, signal);
         const merged = mergeReports(cachedReport, delta, requested);
 
         cachedReport = merged;
@@ -501,7 +534,7 @@
       }
 
       // Otherwise, fetch the full window from backend (job + polling), then cache it in-memory.
-      const data = await runJobAndBuildReport(requested);
+      const data = await runJobAndBuildReport(requested, undefined, signal);
 
       cachedReport = data;
       lastLoadedLookbackDays = requested;
@@ -509,15 +542,23 @@
 
       buildDerivedFilters();
       applyFilters();
-
     } catch (e: any) {
+      // If user clicked again, the previous run will throw AbortError — don't show that as an error.
+      if (e?.name === 'AbortError') return;
+
       console.error(e);
       error = e?.message ?? String(e);
     } finally {
       loading = false;
       progressText = null;
+
+      // Only clear the controller if it still belongs to this run
+      if (runController === myController) {
+        runController = null;
+      }
     }
   }
+
 
   // Re-apply filters whenever the active report or filter state changes
   $: if (report) {
