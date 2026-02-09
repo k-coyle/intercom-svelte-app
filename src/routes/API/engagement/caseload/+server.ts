@@ -12,6 +12,7 @@ const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 const MAX_RETRIES = 3;
+const CONVERSATIONS_PER_PAGE = 100;
 
 // ---- Strict per-request step budget ----
 const STEP_BUDGET_MS = 20_000;
@@ -418,7 +419,7 @@ async function fetchConversationsSearchPage(
 
   const body: any = {
     query: { operator: 'AND', value: filters },
-    pagination: { per_page: 150 }
+    pagination: { per_page: CONVERSATIONS_PER_PAGE }
   };
 
   if (job.startingAfter) body.pagination.starting_after = job.startingAfter;
@@ -499,7 +500,7 @@ async function hydrateContactsByIds(
 
     const body = {
       query: { field: 'id', operator: 'IN', value: chunk },
-      pagination: { per_page: 150 }
+      pagination: { per_page: CONVERSATIONS_PER_PAGE }
     };
 
     const data = await intercomRequest(
