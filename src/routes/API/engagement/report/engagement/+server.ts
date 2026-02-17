@@ -177,6 +177,13 @@ function buildContactSearchQuery(body: ExportRequestBody): any {
     }
   }
 
+  // Has Enrolled Date (non-zero/unset)
+  filters.push({
+    field: `custom_attributes.${ATTR_ENROLLED_DATE}`,
+    operator: '>',
+    value: 0
+  });
+
   const enrolledStartUnix = parseDateToUnix(body.enrolledDateStart);
   const enrolledEndUnix = parseDateToUnix(body.enrolledDateEnd);
 
