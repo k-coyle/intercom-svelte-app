@@ -1,16 +1,8 @@
 // src/routes/API/engagement/new-participants/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
-import {
-  INTERCOM_ACCESS_TOKEN,
-  INTERCOM_VERSION,
-  INTERCOM_API_BASE
-} from '$env/static/private';
-
-const INTERCOM_BASE_URL = INTERCOM_API_BASE || 'https://api.intercom.io';
-const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
+import { intercomRequest } from '$lib/server/intercom';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
-const MAX_RETRIES = 3;
 
 // Custom attribute keys
 const PARTICIPANT_DATE_ATTR_KEY = 'Enrolled Date';
@@ -22,57 +14,6 @@ const SESSION_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
 
 const DEFAULT_LOOKBACK_DAYS = 365;
-
-// ---------- Intercom helper with 429 retry ----------
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Basic Intercom API helper with simple retry on 429.
- */
-async function intercomRequest(
-  path: string,
-  init: RequestInit = {},
-  attempt = 1
-): Promise<any> {
-  if (!INTERCOM_ACCESS_TOKEN) {
-    throw new Error('ACCESS_TOKEN is not set');
-  }
-
-  const res = await fetch(`${INTERCOM_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${INTERCOM_ACCESS_TOKEN}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'Intercom-Version': INTERCOM_API_VERSION,
-      ...(init.headers ?? {})
-    }
-  });
-
-  if (res.status === 429 && attempt < MAX_RETRIES) {
-    const retryAfterHeader = res.headers.get('Retry-After');
-    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : NaN;
-    const delaySeconds = Number.isFinite(retryAfterSeconds)
-      ? retryAfterSeconds
-      : 2 ** attempt; // 2s, 4s, ...
-
-    console.warn(
-      `Intercom 429 rate limit on ${path}, attempt ${attempt} — retrying after ${delaySeconds}s`
-    );
-    await sleep(delaySeconds * 1000);
-    return intercomRequest(path, init, attempt + 1);
-  }
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Intercom ${res.status} ${res.statusText}: ${text}`);
-  }
-
-  return res.json();
-}
 
 // ---------- Search helpers ----------
 

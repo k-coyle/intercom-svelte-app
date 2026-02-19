@@ -1,14 +1,7 @@
 // src/routes/API/engagement/caseload/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
-import {
-  INTERCOM_ACCESS_TOKEN,
-  INTERCOM_VERSION,
-  INTERCOM_API_BASE
-} from '$env/static/private';
+import { intercomRequest as intercomApiRequest } from '$lib/server/intercom';
 import { randomUUID, createHash } from 'crypto';
-
-const INTERCOM_BASE_URL = INTERCOM_API_BASE || 'https://api.intercom.io';
-const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 const MAX_RETRIES = 3;
@@ -207,9 +200,6 @@ function audit(
 
 
 // ---------- Helpers ----------
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function cleanExpiredJobs(nowMs: number) {
   for (const [id, job] of jobs.entries()) {
@@ -283,125 +273,72 @@ async function intercomRequest(
     tag?: string;
     deadlineMs?: number;
     timeoutMs?: number;
-    attempt?: number;
   } = {}
 ): Promise<any> {
-  if (!INTERCOM_ACCESS_TOKEN) {
-    throw new Error('INTERCOM_ACCESS_TOKEN is not set');
-  }
+  const jobId = opts.jobId;
 
-  const attempt = opts.attempt ?? 1;
+  const log = jobId
+    ? (event: string, data: Record<string, any>) => {
+        if (event === 'intercom_response') {
+          if (!opts.tag) return;
+          if (DEBUG) {
+            audit(jobId, 'intercom_response', { tag: opts.tag, path, status: data.status, ms: data.ms }, 'debug');
+          } else if ((data.ms ?? 0) >= 5000) {
+            audit(jobId, 'intercom_slow', { tag: opts.tag, path, status: data.status, ms: data.ms }, 'warn');
+          }
+          return;
+        }
 
-  // Compute timeout based on remaining step time if provided
-  const defaultTimeout = 18_000; // was too low at 12s for large windows
-  const maxTimeout = 25_000;
-  const minTimeout = 4_000;
+        if (event === 'intercom_rate_limited') {
+          audit(jobId, 'intercom_rate_limited', {
+            path,
+            tag: opts.tag ?? null,
+            attempt: data.attempt,
+            delaySeconds: data.delaySeconds
+          });
+          return;
+        }
 
-  let timeoutMs = opts.timeoutMs ?? defaultTimeout;
-  if (opts.deadlineMs) {
-    // Leave a tiny buffer so the handler can still respond
-    timeoutMs = Math.min(timeoutMs, Math.max(minTimeout, timeLeftMs(opts.deadlineMs) - 500));
-  }
-  timeoutMs = Math.min(maxTimeout, Math.max(minTimeout, timeoutMs));
+        if (event === 'intercom_error') {
+          audit(jobId, 'intercom_error', {
+            path,
+            tag: opts.tag ?? null,
+            status: data.status,
+            requestId: data.requestId ?? null
+          });
+          return;
+        }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+        if (event === 'intercom_abort') {
+          audit(jobId, 'intercom_abort', {
+            path,
+            tag: opts.tag ?? null,
+            timeoutMs: data.timeoutMs,
+            ms: data.ms
+          });
+          return;
+        }
 
-  const started = Date.now();
-  try {
-    const res = await fetch(`${INTERCOM_BASE_URL}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${INTERCOM_ACCESS_TOKEN}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'Intercom-Version': INTERCOM_API_VERSION,
-        ...(init.headers ?? {})
+        if (event === 'intercom_exception') {
+          audit(jobId, 'intercom_exception', {
+            path,
+            tag: opts.tag ?? null,
+            ms: data.ms,
+            message: data.message
+          });
+        }
       }
-    });
+    : undefined;
 
-    const ms = Date.now() - started;
-
-    if (opts.jobId && opts.tag) {
-      if (DEBUG) {
-        audit(opts.jobId, 'intercom_response', { tag: opts.tag, path, status: res.status, ms }, 'debug');
-      } else if (ms >= 5000) {
-        audit(opts.jobId, 'intercom_slow', { tag: opts.tag, path, status: res.status, ms }, 'warn');
-      }
-    }
-
-    if (res.status === 429 && attempt < MAX_RETRIES) {
-      const retryAfterHeader = res.headers.get('Retry-After');
-      const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : NaN;
-      const delaySeconds = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : 2 ** attempt;
-
-      if (opts.jobId) {
-        audit(opts.jobId, 'intercom_rate_limited', {
-          path,
-          tag: opts.tag ?? null,
-          attempt,
-          delaySeconds
-        });
-      }
-
-      await sleep(delaySeconds * 1000);
-      return intercomRequest(path, init, { ...opts, attempt: attempt + 1 });
-    }
-
-    if (!res.ok) {
-      const text = await res.text();
-      // Try to extract request_id for auditing
-      let requestId: string | null = null;
-      try {
-        const j = JSON.parse(text);
-        requestId = j?.request_id ?? null;
-      } catch {
-        // ignore
-      }
-      if (opts.jobId) {
-        audit(opts.jobId, 'intercom_error', {
-          path,
-          tag: opts.tag ?? null,
-          status: res.status,
-          requestId
-        });
-      }
-      throw new Error(`Intercom ${res.status} ${res.statusText} on ${path}: ${text}`);
-    }
-
-    return res.json();
-  } catch (e: any) {
-    const ms = Date.now() - started;
-
-    if (isAbortError(e)) {
-      if (opts.jobId) {
-        audit(opts.jobId, 'intercom_abort', {
-          path,
-          tag: opts.tag ?? null,
-          timeoutMs,
-          ms
-        });
-      }
-      // Surface a consistent abort error message
-      const err = new Error(`Intercom request aborted on ${path} after ${timeoutMs}ms`);
-      // Preserve AbortError classification for caller logic
-      (err as any).name = 'AbortError';
-      throw err;
-    }
-
-    if (opts.jobId) {
-      audit(opts.jobId, 'intercom_exception', {
-        path,
-        tag: opts.tag ?? null,
-        ms,
-        message: e?.message ?? String(e)
-      });
-    }
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
+  return intercomApiRequest(path, init, {
+    timeoutMs: opts.timeoutMs,
+    deadlineMs: opts.deadlineMs,
+    maxRetries: MAX_RETRIES,
+    tag: opts.tag,
+    log,
+    logAll: DEBUG,
+    slowThresholdMs: 5000
+  });
 }
 
 // ---------- Intercom paging ----------

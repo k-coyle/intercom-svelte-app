@@ -1,14 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
-import {
-  INTERCOM_ACCESS_TOKEN,
-  INTERCOM_VERSION,
-  INTERCOM_API_BASE
-} from '$env/static/private';
+import { intercomRequest } from '$lib/server/intercom';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-
-const INTERCOM_BASE_URL = INTERCOM_API_BASE || 'https://api.intercom.io';
-const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 
 // Custom attribute keys in Intercom
 const ATTR_USER_ID = 'User ID';
@@ -53,32 +46,6 @@ type IntercomContact = {
   email?: string | null;
   custom_attributes?: Record<string, any>;
 };
-
-// ----- Intercom helper -----
-
-async function intercomRequest(pathname: string, init: RequestInit = {}): Promise<any> {
-  if (!INTERCOM_ACCESS_TOKEN) {
-    throw new Error('INTERCOM_ACCESS_TOKEN is not set');
-  }
-
-  const res = await fetch(`${INTERCOM_BASE_URL}${pathname}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${INTERCOM_ACCESS_TOKEN}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'Intercom-Version': INTERCOM_API_VERSION,
-      ...(init.headers ?? {})
-    }
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Intercom ${res.status} ${res.statusText}: ${text}`);
-  }
-
-  return res.json();
-}
 
 // ----- Utility functions -----
 
