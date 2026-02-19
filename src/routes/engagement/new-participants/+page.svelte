@@ -1,5 +1,13 @@
 <!-- src/routes/engagement/new-participants/+page.svelte -->
 <script lang="ts">
+  import {
+    MAX_LOOKBACK_DAYS,
+    downloadCsv,
+    fetchJson,
+    formatUnixDate,
+    parseLookbackDays
+  } from '$lib/client/report-utils';
+
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
 
   interface ParticipantBuckets {
@@ -96,13 +104,6 @@
     return toDateInputValue(d);
   }
 
-  function formatUnixDate(unix: number | null): string {
-    if (!unix) return '';
-    const d = new Date(unix * 1000);
-    if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleDateString();
-  }
-
   function bucketLabel(b: ParticipantBuckets): string {
     if (b.gt_28) return '> 28 days (Unengaged)';
     if (b.gt_21_to_28) return '22–28 days';
@@ -110,16 +111,9 @@
     return '≤ 14 days';
   }
 
-  function escapeCsv(value: string): string {
-    if (value.includes('"') || value.includes(',') || value.includes('\n')) {
-      return '"' + value.replace(/"/g, '""') + '"';
-    }
-    return value;
-  }
-
   function exportCsv() {
     if (!filteredParticipants.length) {
-      alert('No rows to export. Load data and/or adjust filters first.');
+      error = 'No rows to export. Load data and/or adjust filters first.';
       return;
     }
 
@@ -139,11 +133,7 @@
       'Channels'
     ];
 
-    const lines: string[] = [];
-    lines.push(header.map(escapeCsv).join(','));
-
-    for (const p of filteredParticipants) {
-      const row = [
+    const rows = filteredParticipants.map((p) => [
         p.memberId,
         p.memberName ?? '',
         p.memberEmail ?? '',
@@ -157,21 +147,10 @@
         bucketLabel(p.buckets),
         p.coachNames.join('; '),
         p.channelsUsed.join('; ')
-      ].map((v) => escapeCsv(String(v)));
+      ]
+    );
 
-      lines.push(row.join(','));
-    }
-
-    const csvContent = lines.join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'enrolled-participants-report.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadCsv('enrolled-participants-report.csv', header, rows);
   }
 
   function buildDerivedFilters(source: NewParticipantsReport | null) {
@@ -256,15 +235,7 @@
     error = null;
 
     try {
-      const parsed = Number(selectedLookbackDays || '0');
-      if (Number.isNaN(parsed) || parsed <= 0) {
-        throw new Error(
-          'Please enter a positive lookback window in days (e.g., 60, 90, 180).'
-        );
-      }
-
-      let requested = parsed;
-      if (requested > 365) requested = 365;
+      const requested = parseLookbackDays(selectedLookbackDays);
       selectedLookbackDays = String(requested);
 
       // Reuse cache if we already loaded a superset window
@@ -290,18 +261,11 @@
         return;
       }
 
-      const res = await fetch('/API/engagement/new-participants', {
+      const data = await fetchJson<NewParticipantsReport>('/API/engagement/new-participants', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lookbackDays: requested })
       });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
-      }
-
-      const data: NewParticipantsReport = await res.json();
       report = data;
       cachedReport = data;
       lastLoadedLookbackDays = requested;
@@ -516,7 +480,7 @@
         id="lookback"
         type="number"
         min="1"
-        max="365"
+        max={MAX_LOOKBACK_DAYS}
         bind:value={selectedLookbackDays}
       />
       <button class="reload" on:click={loadReport} disabled={loading}>

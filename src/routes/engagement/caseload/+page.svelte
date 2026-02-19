@@ -1,5 +1,15 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import {
+    cleanupCaseloadJob,
+    createCaseloadJob,
+    fetchCaseloadViewPage,
+    stepCaseloadJob
+  } from '$lib/client/caseload-job';
+  import {
+    MAX_LOOKBACK_DAYS,
+    parseLookbackDays
+  } from '$lib/client/report-utils';
 
   // Keep in sync with backend
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
@@ -267,7 +277,7 @@
 
     // Lookback filter (view-level) — only if user set a valid number
     const lookback = Number(selectedLookbackDays);
-    if (!Number.isNaN(lookback) && lookback > 0 && lookback <= 365) {
+    if (!Number.isNaN(lookback) && lookback > 0 && lookback <= MAX_LOOKBACK_DAYS) {
       members = members.filter((m) => m.daysSinceLastSession <= lookback);
     }
 
@@ -303,63 +313,10 @@
 
   // -------- Helpers: job backend calls --------
 
-  async function cleanupJob(jobId: string) {
-    try {
-      // keepalive helps cleanup on navigation/unload in many browsers
-      await fetch('/API/engagement/caseload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ op: 'cleanup', jobId }),
-        keepalive: true
-      });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
-
-  async function createJob(lookbackDays: number, untilLookbackDays?: number): Promise<string> {
-    const res = await fetch('/API/engagement/caseload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // backend defaults op to create if omitted; sending op explicitly is fine too
-      body: JSON.stringify({ op: 'create', lookbackDays, untilLookbackDays })
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Create job failed (HTTP ${res.status}): ${text}`);
-    }
-
-    const data = await res.json();
-    if (!data?.jobId) throw new Error('Create job failed: missing jobId');
-    return String(data.jobId);
-  }
-
-  async function stepJob(jobId: string): Promise<any> {
-    const res = await fetch('/API/engagement/caseload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op: 'step', jobId })
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Step failed (HTTP ${res.status}): ${text}`);
-    }
-
-    return res.json();
-  }
-
-  async function fetchSummary(jobId: string) {
-    const res = await fetch(`/API/engagement/caseload?jobId=${encodeURIComponent(jobId)}&view=summary`);
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Summary fetch failed (HTTP ${res.status}): ${text}`);
-    }
-    return res.json();
-  }
-
-  async function fetchAllMembers(jobId: string): Promise<CaseloadMemberRow[]> {
+  async function fetchAllMembers(
+    jobId: string,
+    signal?: AbortSignal
+  ): Promise<CaseloadMemberRow[]> {
     const members: CaseloadMemberRow[] = [];
     let offset = 0;
 
@@ -367,17 +324,13 @@
     const limit = 2000;
 
     while (true) {
-      const url =
-        `/API/engagement/caseload?jobId=${encodeURIComponent(jobId)}&view=members` +
-        `&offset=${offset}&limit=${limit}`;
-
-      const res = await fetch(url);
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Members fetch failed (HTTP ${res.status}): ${text}`);
-      }
-
-      const page = await res.json();
+      const page = await fetchCaseloadViewPage<any>(
+        jobId,
+        'members',
+        offset,
+        limit,
+        signal
+      );
       const items = (page.items ?? []) as CaseloadMemberRow[];
       members.push(...items);
 
@@ -400,20 +353,20 @@
     activeJobId = null;
 
     if (previousJobId) {
-      await cleanupJob(previousJobId);
+      await cleanupCaseloadJob(previousJobId, true);
     }
 
     // 2) Track THIS run's jobId locally so we never accidentally clean up a newer run.
     let myJobId: string | null = null;
 
     try {
-      myJobId = await createJob(lookbackDays, untilLookbackDays);
+      myJobId = await createCaseloadJob(lookbackDays, untilLookbackDays, signal);
       activeJobId = myJobId;
 
       let done = false;
 
       while (!done) {
-        const prog = await stepJob(myJobId);
+        const prog = await stepCaseloadJob(myJobId, signal);
 
         if (prog?.status === 'error') {
           throw new Error(`Caseload job failed: ${prog?.error ?? 'Unknown error'}`);
@@ -434,8 +387,8 @@
         if (!done) await new Promise((r) => setTimeout(r, 150));
       }
 
-      const summaryPayload = await fetchSummary(myJobId);
-      const members = await fetchAllMembers(myJobId);
+      const summaryPayload = await fetchCaseloadViewPage<any>(myJobId, 'summary');
+      const members = await fetchAllMembers(myJobId, signal);
 
       return {
         lookbackDays: Number(summaryPayload.lookbackDays),
@@ -447,7 +400,7 @@
     } finally {
       // 3) Always clean up *this run's* job, and await it.
       if (myJobId) {
-        await cleanupJob(myJobId);
+        await cleanupCaseloadJob(myJobId, true);
       }
 
       // 4) Only clear activeJobId if it still points at *this* job
@@ -462,12 +415,12 @@
   // best-effort cleanup on tab close / refresh
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', () => {
-      if (activeJobId) cleanupJob(activeJobId);
+      if (activeJobId) cleanupCaseloadJob(activeJobId, true);
     });
   }
   // cleanup on destroy (best effort)
   onDestroy(() => {
-    if (activeJobId) cleanupJob(activeJobId);
+    if (activeJobId) cleanupCaseloadJob(activeJobId, true);
   });
 
   /**
@@ -492,13 +445,7 @@
     runController = myController;
 
     try {
-      const parsed = Number(selectedLookbackDays);
-      if (Number.isNaN(parsed) || parsed <= 0) {
-        throw new Error('Please enter a lookback window in days (e.g., 30, 90, 365).');
-      }
-
-      let requested = parsed;
-      if (requested > 365) requested = 365; // hard cap
+      const requested = parseLookbackDays(selectedLookbackDays);
       selectedLookbackDays = String(requested);
 
       // If we already loaded a larger/equal window this session, reuse cache (no backend call).
@@ -514,7 +461,7 @@
       const prevJobId = activeJobId;
       activeJobId = null;
       if (prevJobId) {
-        await cleanupJob(prevJobId);
+        await cleanupCaseloadJob(prevJobId, true);
       }
 
       // If user increases lookback, fetch ONLY the delta (older slice) and merge into frontend cache.
@@ -729,7 +676,7 @@
         id="lookback"
         type="number"
         min="1"
-        max="365"
+        max={MAX_LOOKBACK_DAYS}
         bind:value={selectedLookbackDays}
       />
       <button class="reload" on:click={loadReport} disabled={loading}>

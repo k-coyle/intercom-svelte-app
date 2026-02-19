@@ -2,6 +2,17 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { browser } from '$app/environment';
+  import {
+    cleanupCaseloadJob,
+    createCaseloadJob,
+    fetchCaseloadViewPage,
+    stepCaseloadJob
+  } from '$lib/client/caseload-job';
+  import {
+    MAX_LOOKBACK_DAYS,
+    formatUnixDate,
+    parseLookbackDays
+  } from '$lib/client/report-utils';
 
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
 
@@ -123,7 +134,7 @@
     }
 
     const lookback = Number(selectedLookbackDays);
-    if (!Number.isNaN(lookback) && lookback > 0 && lookback <= 365) {
+    if (!Number.isNaN(lookback) && lookback > 0 && lookback <= MAX_LOOKBACK_DAYS) {
       sessions = sessions.filter((s) => daysSince(s.time) <= lookback);
     }
 
@@ -133,63 +144,6 @@
   $: if (report) applyFilters();
 
   // -------- Backend helpers (job + polling) --------
-
-  async function createJob(
-    lookbackDays: number,
-    untilLookbackDays?: number | null,
-    signal?: AbortSignal
-  ): Promise<string> {
-    const body: any = { op: 'create', lookbackDays };
-    if (untilLookbackDays != null && untilLookbackDays > 0) {
-      body.untilLookbackDays = untilLookbackDays;
-    }
-
-    const res = await fetch('/API/engagement/caseload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Create job failed (HTTP ${res.status}): ${text}`);
-    }
-
-    const json = await res.json();
-    const jobId = String(json.jobId ?? '');
-    if (!jobId) throw new Error('Create job failed: missing jobId');
-    return jobId;
-  }
-
-  async function stepJob(jobId: string, signal?: AbortSignal): Promise<any> {
-    const res = await fetch('/API/engagement/caseload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op: 'step', jobId }),
-      signal
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Step failed (HTTP ${res.status}): ${text}`);
-    }
-
-    return res.json();
-  }
-
-  async function cleanupJob(jobId: string) {
-    try {
-      // No AbortSignal here — cleanup should still run even if a new load starts.
-      await fetch('/API/engagement/caseload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ op: 'cleanup', jobId })
-      });
-    } catch {
-      // best-effort
-    }
-  }
 
   async function fetchAllSessions(
     jobId: string,
@@ -202,18 +156,13 @@
     while (true) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-      const url = `/API/engagement/caseload?jobId=${encodeURIComponent(
-        jobId
-      )}&view=sessions&offset=${offset}&limit=${limit}`;
-
-      const res = await fetch(url, { signal });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Sessions fetch failed (HTTP ${res.status}): ${text}`);
-      }
-
-      const json = await res.json();
+      const json = await fetchCaseloadViewPage<any>(
+        jobId,
+        'sessions',
+        offset,
+        limit,
+        signal
+      );
       const items: SessionDetailRow[] = json.items ?? json.data ?? [];
       all = all.concat(items);
 
@@ -285,13 +234,7 @@
       runController = new AbortController();
       signal = runController.signal;
 
-      const parsed = Number(selectedLookbackDays);
-      if (Number.isNaN(parsed) || parsed <= 0) {
-        throw new Error('Please enter a lookback window in days (e.g., 30, 90, 365).');
-      }
-
-      let requested = parsed;
-      if (requested > 365) requested = 365;
+      const requested = parseLookbackDays(selectedLookbackDays);
       selectedLookbackDays = String(requested);
 
       // If already loaded a larger/equal window, reuse browser cache only
@@ -307,16 +250,16 @@
       // Clean up any prior job safely
       const prev = activeJobId;
       activeJobId = null;
-      if (prev) await cleanupJob(prev);
+      if (prev) await cleanupCaseloadJob(prev);
 
-      myJobId = await createJob(requested, until, signal);
+      myJobId = await createCaseloadJob(requested, until, signal);
       activeJobId = myJobId;
 
       // Poll / step until complete
       while (true) {
         if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-        const prog = await stepJob(myJobId, signal);
+        const prog = await stepCaseloadJob(myJobId, signal);
 
         if (prog?.status === 'error') throw new Error(String(prog?.error ?? 'Job failed'));
         if (prog?.status === 'cancelled') throw new Error('Job cancelled');
@@ -369,7 +312,7 @@
       loading = false;
 
       // Always cleanup server job state ASAP so Node isn't acting as a cache.
-      if (myJobId) await cleanupJob(myJobId);
+      if (myJobId) await cleanupCaseloadJob(myJobId);
       if (activeJobId === myJobId) activeJobId = null;
 
       progressText = null;
@@ -535,7 +478,13 @@
   <div class="filters">
     <div class="filter-group">
       <label for="lookback">Lookback window (days, max 365)</label>
-      <input id="lookback" type="number" min="1" max="365" bind:value={selectedLookbackDays} />
+      <input
+        id="lookback"
+        type="number"
+        min="1"
+        max={MAX_LOOKBACK_DAYS}
+        bind:value={selectedLookbackDays}
+      />
       <button class="reload" on:click={loadReport} disabled={loading}>
         {#if loading}
           Loading…
@@ -610,7 +559,7 @@
       <tbody>
         {#each filteredSessions.slice(0, 2000) as s}
           <tr>
-            <td>{new Date(s.time * 1000).toLocaleString()}</td>
+            <td>{formatUnixDate(s.time, true)}</td>
             <td><span class="pill">{s.channel}</span></td>
             <td>{s.coachName || s.coachId || '—'}</td>
             <td>

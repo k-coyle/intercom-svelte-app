@@ -1,4 +1,10 @@
 <script lang="ts">
+  import {
+    downloadCsv,
+    fetchJson,
+    formatUnixDate
+  } from '$lib/client/report-utils';
+
   interface BillingRow {
     memberId: string;
     memberName: string | null;
@@ -94,7 +100,7 @@
         return;
       }
 
-      const res = await fetch('/API/engagement/billing', {
+      const data = await fetchJson<BillingReport>('/API/engagement/billing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ monthYearLabel: requestedMonth })
@@ -102,12 +108,6 @@
 
       loadingStage = 'Parsing results…';
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
-      }
-
-      const data: BillingReport = await res.json();
       report = data;
       cachedReport = data;
       lastLoadedMonthLabel = data.monthYearLabel;
@@ -122,26 +122,9 @@
       loading = false;
     }
   }
-
-
-  function formatDateFromUnix(unix: number | null): string {
-    if (unix == null) return '';
-    const d = new Date(unix * 1000);
-    if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleDateString();
-  }
-
-  function escapeCsv(value: string): string {
-    if (value.includes('"') || value.includes(',') || value.includes('\n')) {
-      return `"${value.replace(/"/g, '""')}"`;
-    }
-    return value;
-  }
-
   function exportCsv() {
     if (!report) return;
 
-    const rows = filteredRows;
     const headers = [
       'User ID',
       'Name',
@@ -153,42 +136,23 @@
       'Engaged During Month'
     ];
 
-    const lines: string[] = [];
-    lines.push(headers.map(escapeCsv).join(','));
-
-    for (const row of rows) {
-      const regDate = formatDateFromUnix(row.registrationAt);
-      const lastCall = formatDateFromUnix(row.lastSessionAt);
-
-      const values = [
+    const rows = filteredRows.map((row) => [
         row.memberId,
         row.memberName ?? '',
         row.memberEmail ?? '',
         row.employer ?? '',
-        regDate,
-        lastCall,
+        formatUnixDate(row.registrationAt),
+        formatUnixDate(row.lastSessionAt),
         row.isNewParticipant ? 'Yes' : 'No',
         row.engagedDuringMonth ? 'Yes' : 'No'
-      ];
-
-      lines.push(values.map((v) => escapeCsv(String(v))).join(','));
-    }
-
-    const csvContent = lines.join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
+      ]
+    );
 
     const monthStr = report.month.toString().padStart(2, '0');
     const suffix = selectedEmployer ? `_${selectedEmployer.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
     const filename = `billing_${report.year}-${monthStr}${suffix}.csv`;
 
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadCsv(filename, headers, rows);
   }
 
   // --- REACTIVE FILTERING & METRICS ---
@@ -392,8 +356,7 @@
       {/if}
     </button>
 
-    </div>
-      <div class="filter-group" style="min-width: 180px;">
+    <div class="filter-group" style="min-width: 180px;">
       <label for="month">Month</label>
       <input id="month" type="month" bind:value={selectedMonthLabel} />
       <div class="muted">Select the calendar month to generate billing for.</div>
@@ -410,6 +373,11 @@
         {new Date(report.generatedAt).toLocaleString()}
       </div>
     {/if}
+  </div>
+
+  {#if loading && loadingStage}
+    <div class="muted" style="margin-bottom: 0.75rem;">{loadingStage}</div>
+  {/if}
 
   {#if report}
     <div class="filters">
@@ -476,8 +444,8 @@
             <td>{row.memberName || '(no name)'}</td>
             <td>{row.memberEmail || ''}</td>
             <td>{row.employer || '—'}</td>
-            <td>{formatDateFromUnix(row.registrationAt)}</td>
-            <td>{formatDateFromUnix(row.lastSessionAt)}</td>
+            <td>{formatUnixDate(row.registrationAt)}</td>
+            <td>{formatUnixDate(row.lastSessionAt)}</td>
             <td>
               {#if row.isNewParticipant}
                 <span class="chip chip-new">New</span>
