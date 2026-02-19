@@ -1,20 +1,37 @@
 import type { RequestHandler } from '@sveltejs/kit';
-import { intercomRequest } from '$lib/server/intercom';
+import {
+  coerceIntercomPerPage,
+  extractIntercomContacts,
+  intercomPaginate
+} from '$lib/server/intercom';
+import {
+  INTERCOM_ATTR_DOB,
+  INTERCOM_ATTR_ELIGIBLE_PROGRAMS,
+  INTERCOM_ATTR_EMPLOYER,
+  INTERCOM_ATTR_ENROLLED_DATE,
+  INTERCOM_ATTR_ENGAGEMENT_STATUS,
+  INTERCOM_ATTR_ENGAGEMENT_STATUS_DATE,
+  INTERCOM_ATTR_LAST_SESSION,
+  INTERCOM_ATTR_NAME,
+  INTERCOM_ATTR_REFERRAL,
+  INTERCOM_ATTR_REGISTRATION_CODE,
+  INTERCOM_ATTR_USER_ID
+} from '$lib/server/intercom-attrs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 // Custom attribute keys in Intercom
-const ATTR_USER_ID = 'User ID';
-const ATTR_NAME = 'Name';
-const ATTR_DOB = 'Date of birth';
-const ATTR_EMPLOYER = 'Employer';
-const ATTR_LAST_SESSION = 'Last Coaching Session';
-const ATTR_ENGAGEMENT_STATUS = 'Engagement Status';
-const ATTR_ENGAGEMENT_STATUS_DATE = 'Engagement Status Date';
-const ATTR_ELIGIBLE_PROGRAMS = 'Eligible Programs';
-const ATTR_REGISTRATION_CODE = 'Registration Code';
-const ATTR_REFERRAL = 'Referral';
-const ATTR_ENROLLED_DATE = 'Enrolled Date'; // contact attribute used for participant date
+const ATTR_USER_ID = INTERCOM_ATTR_USER_ID;
+const ATTR_NAME = INTERCOM_ATTR_NAME;
+const ATTR_DOB = INTERCOM_ATTR_DOB;
+const ATTR_EMPLOYER = INTERCOM_ATTR_EMPLOYER;
+const ATTR_LAST_SESSION = INTERCOM_ATTR_LAST_SESSION;
+const ATTR_ENGAGEMENT_STATUS = INTERCOM_ATTR_ENGAGEMENT_STATUS;
+const ATTR_ENGAGEMENT_STATUS_DATE = INTERCOM_ATTR_ENGAGEMENT_STATUS_DATE;
+const ATTR_ELIGIBLE_PROGRAMS = INTERCOM_ATTR_ELIGIBLE_PROGRAMS;
+const ATTR_REGISTRATION_CODE = INTERCOM_ATTR_REGISTRATION_CODE;
+const ATTR_REFERRAL = INTERCOM_ATTR_REFERRAL;
+const ATTR_ENROLLED_DATE = INTERCOM_ATTR_ENROLLED_DATE; // contact attribute used for participant date
 
 type ReturnMode = 'file' | 'stream' | 'json';
 
@@ -222,46 +239,23 @@ function buildContactSearchQuery(body: ExportRequestBody): any {
 // Fetch all contacts matching filters, with pagination
 async function searchContactsForExport(body: ExportRequestBody): Promise<IntercomContact[]> {
   const query = buildContactSearchQuery(body);
-  const perPage = body.perPage && body.perPage > 0 && body.perPage <= 150 ? body.perPage : 150;
+  const perPage = coerceIntercomPerPage(body.perPage);
 
-  const allContacts: IntercomContact[] = [];
-  let pagination: any = { per_page: perPage };
-  let page = 1;
-
-  while (pagination) {
-    const payload: any = {
-      query,
-      pagination
-    };
-
-    const data = await intercomRequest('/contacts/search', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-
-    const contacts: IntercomContact[] = data.data ?? [];
-    const totalCount = data.total_count ?? data.total ?? 'unknown';
-
-    console.log(
-      `Contacts search page ${page}: got ${contacts.length} contacts (total_count=${totalCount}).`
-    );
-
-    allContacts.push(...contacts);
-
-    if (!data.pages?.next) {
-      pagination = null;
-      break;
+  const contacts = await intercomPaginate<IntercomContact>({
+    path: '/contacts/search',
+    body: { query },
+    perPage,
+    extractItems: extractIntercomContacts,
+    onPage: ({ page, items, totalCount }) => {
+      const count = totalCount ?? 'unknown';
+      console.log(
+        `Contacts search page ${page}: got ${items} contacts (total_count=${count}).`
+      );
     }
+  });
 
-    pagination = {
-      per_page: perPage,
-      starting_after: data.pages.next.starting_after
-    };
-    page += 1;
-  }
-
-  console.log(`Total contacts fetched for CSV export: ${allContacts.length}`);
-  return allContacts;
+  console.log(`Total contacts fetched for CSV export: ${contacts.length}`);
+  return contacts;
 }
 
 // Build CSV string from contacts

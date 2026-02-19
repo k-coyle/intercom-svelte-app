@@ -1,9 +1,18 @@
 import type { RequestHandler } from '@sveltejs/kit';
-import { intercomRequest } from '$lib/server/intercom';
+import {
+  coerceIntercomPerPage,
+  extractIntercomContacts,
+  intercomPaginate,
+  intercomRequest
+} from '$lib/server/intercom';
+import {
+  INTERCOM_ATTR_ELIGIBLE_PROGRAMS,
+  INTERCOM_ATTR_REFERRAL
+} from '$lib/server/intercom-attrs';
 
 // Contact attribute keys
-const ATTR_REFERRAL = 'Referral';
-const ATTR_ELIGIBLE_PROGRAMS = 'Eligible Programs';
+const ATTR_REFERRAL = INTERCOM_ATTR_REFERRAL;
+const ATTR_ELIGIBLE_PROGRAMS = INTERCOM_ATTR_ELIGIBLE_PROGRAMS;
 
 // Default mapping
 const DEFAULT_REFERRAL_VALUE = 'Counter Health';
@@ -28,12 +37,9 @@ async function searchContactsByReferral(
   referralValue: string,
   perPage: number
 ): Promise<IntercomContact[]> {
-  const all: IntercomContact[] = [];
-  let page = 1;
-  let pagination: any = { per_page: perPage };
-
-  while (pagination) {
-    const payload = {
+  const contacts = await intercomPaginate<IntercomContact>({
+    path: '/contacts/search',
+    body: {
       query: {
         operator: 'AND',
         value: [
@@ -48,40 +54,22 @@ async function searchContactsByReferral(
             value: referralValue
           }
         ]
-      },
-      pagination
-    };
-
-    const data = await intercomRequest('/contacts/search', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-
-    const contacts: IntercomContact[] = data.data ?? [];
-    const totalCount = data.total_count ?? data.total ?? 'unknown';
-
-    console.log(
-      `referral-sync contacts page ${page}: ${contacts.length} contacts (total_count=${totalCount})`
-    );
-
-    all.push(...contacts);
-
-    if (!data.pages?.next?.starting_after) {
-      pagination = null;
-      break;
+      }
+    },
+    perPage,
+    extractItems: extractIntercomContacts,
+    onPage: ({ page, items, totalCount }) => {
+      const count = totalCount ?? 'unknown';
+      console.log(
+        `referral-sync contacts page ${page}: ${items} contacts (total_count=${count})`
+      );
     }
-
-    pagination = {
-      per_page: perPage,
-      starting_after: data.pages.next.starting_after
-    };
-    page += 1;
-  }
+  });
 
   console.log(
-    `referral-sync: total contacts fetched for Referral="${referralValue}": ${all.length}`
+    `referral-sync: total contacts fetched for Referral="${referralValue}": ${contacts.length}`
   );
-  return all;
+  return contacts;
 }
 
 // ---------- Core logic ----------
@@ -90,8 +78,7 @@ async function runReferralSync(body: ReferralSyncRequest) {
   const dryRun = body.dryRun ?? true;
   const referralValue = body.referralValue ?? DEFAULT_REFERRAL_VALUE;
   const eligibleValue = body.eligibleProgramsValue ?? DEFAULT_ELIGIBLE_VALUE;
-  const perPage =
-    body.perPage && body.perPage > 0 && body.perPage <= 150 ? body.perPage : 150;
+  const perPage = coerceIntercomPerPage(body.perPage);
 
   const contacts = await searchContactsByReferral(referralValue, perPage);
 

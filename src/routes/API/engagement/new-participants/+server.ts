@@ -1,13 +1,24 @@
 // src/routes/API/engagement/new-participants/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
-import { intercomRequest } from '$lib/server/intercom';
+import {
+  extractIntercomContacts,
+  extractIntercomConversations,
+  intercomPaginate,
+  intercomRequest,
+  INTERCOM_MAX_PER_PAGE
+} from '$lib/server/intercom';
+import {
+  INTERCOM_ATTR_CHANNEL,
+  INTERCOM_ATTR_EMPLOYER,
+  INTERCOM_ATTR_ENROLLED_DATE
+} from '$lib/server/intercom-attrs';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 // Custom attribute keys
-const PARTICIPANT_DATE_ATTR_KEY = 'Enrolled Date';
-const CLIENT_ATTR_KEY = 'Employer';
-const CHANNEL_ATTR_KEY = 'Channel';
+const PARTICIPANT_DATE_ATTR_KEY = INTERCOM_ATTR_ENROLLED_DATE;
+const CLIENT_ATTR_KEY = INTERCOM_ATTR_EMPLOYER;
+const CHANNEL_ATTR_KEY = INTERCOM_ATTR_CHANNEL;
 
 // Channels that count as "coaching sessions" for this report
 const SESSION_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
@@ -22,12 +33,9 @@ const DEFAULT_LOOKBACK_DAYS = 365;
  * is within the lookback window.
  */
 async function searchEnrolledContactsSince(sinceUnix: number): Promise<any[]> {
-  const allContacts: any[] = [];
-  let startingAfter: string | undefined = undefined;
-  let page = 1;
-
-  while (true) {
-    const body: any = {
+  const contacts = await intercomPaginate({
+    path: '/contacts/search',
+    body: {
       query: {
         operator: 'AND',
         value: [
@@ -38,39 +46,20 @@ async function searchEnrolledContactsSince(sinceUnix: number): Promise<any[]> {
             value: sinceUnix
           }
         ]
-      },
-      pagination: {
-        per_page: 150
       }
-    };
-
-    if (startingAfter) {
-      body.pagination.starting_after = startingAfter;
+    },
+    perPage: INTERCOM_MAX_PER_PAGE,
+    extractItems: extractIntercomContacts,
+    onPage: ({ page, items, totalCount }) => {
+      const count = totalCount ?? 'unknown';
+      console.log(
+        `New-participants contacts page ${page}: got ${items} contacts (total_count=${count}).`
+      );
     }
+  });
 
-    const data = await intercomRequest('/contacts/search', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-
-    const contacts = data.data ?? data.contacts ?? [];
-    const totalCount = data.total_count ?? data.total ?? 'unknown';
-
-    console.log(
-      `New-participants contacts page ${page}: got ${contacts.length} contacts (total_count=${totalCount}).`
-    );
-
-    allContacts.push(...contacts);
-
-    const nextCursor: string | undefined = data.pages?.next?.starting_after;
-    if (!nextCursor) break;
-
-    startingAfter = nextCursor;
-    page += 1;
-  }
-
-  console.log(`Total contacts with recent registration: ${allContacts.length}`);
-  return allContacts;
+  console.log(`Total contacts with recent registration: ${contacts.length}`);
+  return contacts;
 }
 
 /**
@@ -81,12 +70,9 @@ async function searchClosedConversationsSince(
   sinceUnix: number,
   contactIds: string[]
 ): Promise<any[]> {
-  const allConversations: any[] = [];
-  let startingAfter: string | undefined = undefined;
-  let page = 1;
-
-  while (true) {
-    const body: any = {
+  const conversations = await intercomPaginate({
+    path: '/conversations/search',
+    body: {
       query: {
         operator: 'AND',
         value: [
@@ -94,39 +80,20 @@ async function searchClosedConversationsSince(
           { field: 'updated_at', operator: '>', value: sinceUnix },
           { field: 'contact_ids', operator: 'IN', value: contactIds }
         ]
-      },
-      pagination: {
-        per_page: 150
       }
-    };
-
-    if (startingAfter) {
-      body.pagination.starting_after = startingAfter;
+    },
+    perPage: INTERCOM_MAX_PER_PAGE,
+    extractItems: extractIntercomConversations,
+    onPage: ({ page, items, totalCount }) => {
+      const count = totalCount ?? 'unknown';
+      console.log(
+        `New-participants conversations page ${page}: got ${items} conversations (total_count=${count}).`
+      );
     }
+  });
 
-    const data = await intercomRequest('/conversations/search', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-
-    const conversations = data.conversations ?? data.data ?? [];
-    const totalCount = data.total_count ?? data.total ?? 'unknown';
-
-    console.log(
-      `New-participants conversations page ${page}: got ${conversations.length} conversations (total_count=${totalCount}).`
-    );
-
-    allConversations.push(...conversations);
-
-    const nextCursor: string | undefined = data.pages?.next?.starting_after;
-    if (!nextCursor) break;
-
-    startingAfter = nextCursor;
-    page += 1;
-  }
-
-  console.log(`Total fetched conversations for chunk: ${allConversations.length}`);
-  return allConversations;
+  console.log(`Total fetched conversations for chunk: ${conversations.length}`);
+  return conversations;
 }
 
 async function fetchConversationsForContacts(

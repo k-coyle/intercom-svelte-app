@@ -1,11 +1,25 @@
 import type { RequestHandler } from '@sveltejs/kit';
-import { intercomRequest } from '$lib/server/intercom';
+import {
+  extractIntercomConversations,
+  intercomPaginate,
+  intercomRequest,
+  INTERCOM_MAX_PER_PAGE
+} from '$lib/server/intercom';
+import {
+  INTERCOM_ATTR_CHANNEL,
+  INTERCOM_ATTR_ENROLLED_DATE,
+  INTERCOM_ATTR_FIRST_SESSION,
+  INTERCOM_ATTR_LAST_CALL,
+  INTERCOM_ATTR_LAST_SESSION,
+  INTERCOM_ATTR_REGISTRATION_DATE,
+  INTERCOM_ATTR_SERVICE_CODE
+} from '$lib/server/intercom-attrs';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 // Conversation custom attributes
-const CHANNEL_ATTR_KEY = 'Channel';
-const SERVICE_CODE_ATTR_KEY = 'Service Code';
+const CHANNEL_ATTR_KEY = INTERCOM_ATTR_CHANNEL;
+const SERVICE_CODE_ATTR_KEY = INTERCOM_ATTR_SERVICE_CODE;
 
 const CHANNEL_PHONE = 'Phone';
 const CHANNEL_VIDEO = 'Video Conference';
@@ -14,11 +28,11 @@ const CALL_CHANNELS = [CHANNEL_PHONE, CHANNEL_VIDEO] as const;
 const SERVICE_CODE_ALLOWED = ['Health Coaching 001', 'Disease Management 002'] as const;
 
 // Contact custom attributes
-const ATTR_ENROLLED_DATE = 'Enrolled Date';     // used indirectly via engagement job
-const ATTR_REGISTRATION_DATE = 'Registration Date';
-const ATTR_FIRST_SESSION = 'First Session Date';
-const ATTR_LAST_SESSION = 'Last Coaching Session';
-const ATTR_LAST_CALL = 'Last Call';
+const ATTR_ENROLLED_DATE = INTERCOM_ATTR_ENROLLED_DATE;     // used indirectly via engagement job
+const ATTR_REGISTRATION_DATE = INTERCOM_ATTR_REGISTRATION_DATE;
+const ATTR_FIRST_SESSION = INTERCOM_ATTR_FIRST_SESSION;
+const ATTR_LAST_SESSION = INTERCOM_ATTR_LAST_SESSION;
+const ATTR_LAST_CALL = INTERCOM_ATTR_LAST_CALL;
 
 type Mode = 'all' | 'first-only' | 'last-and-call-only';
 
@@ -34,48 +48,27 @@ type IntercomContact = any;
 // ---------- Conversations search ----------
 
 async function searchConversationsSince(sinceUnix: number): Promise<IntercomConversation[]> {
-  const all: IntercomConversation[] = [];
-  let page = 1;
-  let pagination: any = { per_page: 150 };
-
-  while (pagination) {
-    const body: any = {
+  const conversations = await intercomPaginate<IntercomConversation>({
+    path: '/conversations/search',
+    body: {
       query: {
         field: 'updated_at',
         operator: '>',
         value: sinceUnix
-      },
-      pagination
-    };
-
-    const data = await intercomRequest('/conversations/search', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-
-    const conversations: IntercomConversation[] = data.conversations ?? data.data ?? [];
-    const totalCount = data.total_count ?? data.total ?? 'unknown';
-
-    console.log(
-      `session-sync conversations page ${page}: ${conversations.length} convos (total_count=${totalCount})`
-    );
-
-    all.push(...conversations);
-
-    if (!data.pages?.next?.starting_after) {
-      pagination = null;
-      break;
+      }
+    },
+    perPage: INTERCOM_MAX_PER_PAGE,
+    extractItems: extractIntercomConversations,
+    onPage: ({ page, items, totalCount }) => {
+      const count = totalCount ?? 'unknown';
+      console.log(
+        `session-sync conversations page ${page}: ${items} convos (total_count=${count})`
+      );
     }
+  });
 
-    pagination = {
-      per_page: 150,
-      starting_after: data.pages.next.starting_after
-    };
-    page += 1;
-  }
-
-  console.log(`session-sync: total conversations fetched: ${all.length}`);
-  return all;
+  console.log(`session-sync: total conversations fetched: ${conversations.length}`);
+  return conversations;
 }
 
 

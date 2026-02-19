@@ -7,6 +7,8 @@ import {
 const INTERCOM_BASE_URL = INTERCOM_API_BASE || 'https://api.intercom.io';
 const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
 
+export const INTERCOM_MAX_PER_PAGE = 150;
+
 const DEFAULT_TIMEOUT_MS = 18_000;
 const DEFAULT_MIN_TIMEOUT_MS = 4_000;
 const DEFAULT_MAX_TIMEOUT_MS = 25_000;
@@ -27,6 +29,23 @@ export type IntercomRequestOptions = {
   tag?: string;
   log?: IntercomLogFn;
   logAll?: boolean;
+};
+
+export type IntercomPaginationInfo = {
+  page: number;
+  items: number;
+  totalCount?: number;
+  nextCursor: string | null;
+};
+
+export type IntercomPaginateOptions<T> = {
+  path: string;
+  body: Record<string, any>;
+  perPage?: number;
+  extractItems: (data: any) => T[];
+  getNextCursor?: (data: any) => string | undefined;
+  onPage?: (info: IntercomPaginationInfo) => void;
+  requestOptions?: IntercomRequestOptions;
 };
 
 function sleep(ms: number) {
@@ -82,6 +101,125 @@ async function parseRequestId(text: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+export function coerceIntercomPerPage(
+  perPage?: number,
+  max = INTERCOM_MAX_PER_PAGE,
+  fallback = INTERCOM_MAX_PER_PAGE
+): number {
+  if (!perPage || !Number.isFinite(perPage)) return fallback;
+  if (perPage <= 0) return fallback;
+  return Math.min(Math.floor(perPage), max);
+}
+
+export function extractIntercomContacts(data: any): any[] {
+  return data.data ?? data.contacts ?? [];
+}
+
+export function extractIntercomConversations(data: any): any[] {
+  return data.conversations ?? data.data ?? [];
+}
+
+function getTotalCount(data: any): number | undefined {
+  const raw = data?.total_count ?? data?.total;
+  if (typeof raw === 'number') return raw;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function getNextCursor(data: any): string | undefined {
+  return data?.pages?.next?.starting_after;
+}
+
+export async function intercomPaginate<T>(
+  opts: IntercomPaginateOptions<T>
+): Promise<T[]> {
+  const perPage = coerceIntercomPerPage(opts.perPage);
+  const all: T[] = [];
+  let page = 1;
+  let startingAfter: string | undefined;
+
+  while (true) {
+    const payload: any = {
+      ...opts.body,
+      pagination: {
+        per_page: perPage
+      }
+    };
+
+    if (startingAfter) {
+      payload.pagination.starting_after = startingAfter;
+    }
+
+    const data = await intercomRequest(
+      opts.path,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      },
+      opts.requestOptions
+    );
+
+    const items = opts.extractItems(data);
+    all.push(...items);
+
+    const nextCursor = (opts.getNextCursor ?? getNextCursor)(data);
+    if (opts.onPage) {
+      opts.onPage({
+        page,
+        items: items.length,
+        totalCount: getTotalCount(data),
+        nextCursor: nextCursor ?? null
+      });
+    }
+
+    if (!nextCursor) break;
+
+    startingAfter = nextCursor;
+    page += 1;
+  }
+
+  return all;
+}
+
+export async function fetchContactsByIds(
+  contactIds: string[],
+  opts: {
+    concurrency?: number;
+    requestOptions?: IntercomRequestOptions;
+    onError?: (contactId: string, error: unknown) => void;
+  } = {}
+): Promise<Map<string, any>> {
+  const result = new Map<string, any>();
+  const ids = [...new Set(contactIds)].filter(Boolean).map(String);
+
+  if (ids.length === 0) return result;
+
+  const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 10));
+  let index = 0;
+
+  async function worker() {
+    while (index < ids.length) {
+      const id = ids[index];
+      index += 1;
+
+      try {
+        const contact = await intercomRequest(`/contacts/${id}`, {}, opts.requestOptions);
+        result.set(id, contact);
+      } catch (err) {
+        if (opts.onError) opts.onError(id, err);
+      }
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, ids.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
+
+  return result;
 }
 
 export async function intercomRequest(

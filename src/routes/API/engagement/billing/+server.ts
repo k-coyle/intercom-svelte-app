@@ -1,15 +1,26 @@
 // src/routes/API/engagement/billing/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
-import { intercomRequest } from '$lib/server/intercom';
+import {
+  extractIntercomContacts,
+  extractIntercomConversations,
+  fetchContactsByIds,
+  intercomPaginate,
+  INTERCOM_MAX_PER_PAGE
+} from '$lib/server/intercom';
+import {
+  INTERCOM_ATTR_CHANNEL,
+  INTERCOM_ATTR_EMPLOYER,
+  INTERCOM_ATTR_ENROLLED_DATE
+} from '$lib/server/intercom-attrs';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 // Attribute keys
 // NOTE: Billing now uses "Enrolled Date" as the participant start date.
 // The BillingRow.registrationAt field will now hold the Enrolled Date.
-const ENROLLED_ATTR_KEY = 'Enrolled Date';
-const EMPLOYER_ATTR_KEY = 'Employer';
-const CHANNEL_ATTR_KEY = 'Channel';
+const ENROLLED_ATTR_KEY = INTERCOM_ATTR_ENROLLED_DATE;
+const EMPLOYER_ATTR_KEY = INTERCOM_ATTR_EMPLOYER;
+const CHANNEL_ATTR_KEY = INTERCOM_ATTR_CHANNEL;
 
 // Engagement definition
 const ENGAGED_DAYS = 57; // "<57 days ago"
@@ -51,12 +62,9 @@ async function searchClosedConversationsBetween(
   startUnix: number,
   endUnix: number
 ): Promise<any[]> {
-  const allConversations: any[] = [];
-  let startingAfter: string | undefined = undefined;
-  let page = 1;
-
-  while (true) {
-    const body: any = {
+  const conversations = await intercomPaginate({
+    path: '/conversations/search',
+    body: {
       query: {
         operator: 'AND',
         value: [
@@ -64,39 +72,20 @@ async function searchClosedConversationsBetween(
           { field: 'created_at', operator: '>', value: startUnix },
           { field: 'created_at', operator: '<=', value: endUnix }
         ]
-      },
-      pagination: {
-        per_page: 150
       }
-    };
-
-    if (startingAfter) {
-      body.pagination.starting_after = startingAfter;
+    },
+    perPage: INTERCOM_MAX_PER_PAGE,
+    extractItems: extractIntercomConversations,
+    onPage: ({ page, items, totalCount }) => {
+      const count = totalCount ?? 'unknown';
+      console.log(
+        `Billing: conversations page ${page}: got ${items} (total_count=${count}).`
+      );
     }
+  });
 
-    const data = await intercomRequest('/conversations/search', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-
-    const conversations = data.conversations ?? [];
-    const totalCount = data.total_count ?? data.total ?? 'unknown';
-
-    console.log(
-      `Billing: conversations page ${page}: got ${conversations.length} (total_count=${totalCount}).`
-    );
-
-    allConversations.push(...conversations);
-
-    const nextCursor: string | undefined = data.pages?.next?.starting_after;
-    if (!nextCursor) break;
-
-    startingAfter = nextCursor;
-    page += 1;
-  }
-
-  console.log(`Billing: total conversations in window: ${allConversations.length}`);
-  return allConversations;
+  console.log(`Billing: total conversations in window: ${conversations.length}`);
+  return conversations;
 }
 
 /**
@@ -108,11 +97,9 @@ async function searchNewParticipantsInMonth(
   monthEndUnix: number
 ): Promise<Set<string>> {
   const ids = new Set<string>();
-  let startingAfter: string | undefined = undefined;
-  let page = 1;
-
-  while (true) {
-    const body: any = {
+  const contacts = await intercomPaginate({
+    path: '/contacts/search',
+    body: {
       query: {
         operator: 'AND',
         value: [
@@ -127,39 +114,22 @@ async function searchNewParticipantsInMonth(
             value: monthEndUnix // effectively < monthEndUnix
           }
         ]
-      },
-      pagination: {
-        per_page: 150
       }
-    };
-
-    if (startingAfter) {
-      body.pagination.starting_after = startingAfter;
+    },
+    perPage: INTERCOM_MAX_PER_PAGE,
+    extractItems: extractIntercomContacts,
+    onPage: ({ page, items, totalCount }) => {
+      const count = totalCount ?? 'unknown';
+      console.log(
+        `Billing: contacts page ${page}: got ${items} (total_count=${count}).`
+      );
     }
+  });
 
-    const data = await intercomRequest('/contacts/search', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-
-    const contacts = data.data ?? data.contacts ?? [];
-    const totalCount = data.total_count ?? data.total ?? 'unknown';
-
-    console.log(
-      `Billing: contacts page ${page}: got ${contacts.length} (total_count=${totalCount}).`
-    );
-
-    for (const c of contacts) {
-      if (c.id) {
-        ids.add(String(c.id));
-      }
+  for (const c of contacts) {
+    if (c.id) {
+      ids.add(String(c.id));
     }
-
-    const nextCursor: string | undefined = data.pages?.next?.starting_after;
-    if (!nextCursor) break;
-
-    startingAfter = nextCursor;
-    page += 1;
   }
 
   console.log(`Billing: new participants in month (by Enrolled Date): ${ids.size}`);
@@ -170,27 +140,13 @@ async function searchNewParticipantsInMonth(
  * Fetch details for many contacts with limited concurrency.
  */
 async function fetchContactsDetails(contactIds: string[]): Promise<Map<string, any>> {
-  const result = new Map<string, any>();
-  const ids = [...new Set(contactIds)];
-  const concurrency = 10;
-  const queue = [...ids];
-
-  while (queue.length > 0) {
-    const batch = queue.splice(0, concurrency);
-
-    await Promise.all(
-      batch.map(async (id) => {
-        try {
-          const contact = await intercomRequest(`/contacts/${id}`);
-          result.set(id, contact);
-        } catch (err: any) {
-          console.error(`Billing: error fetching contact ${id}:`, err?.message ?? err);
-        }
-      })
-    );
-  }
-
-  return result;
+  return fetchContactsByIds(contactIds, {
+    concurrency: 10,
+    onError: (id, err) => {
+      const message = (err as any)?.message ?? String(err);
+      console.error(`Billing: error fetching contact ${id}:`, message);
+    }
+  });
 }
 
 // ---------- Billing logic ----------

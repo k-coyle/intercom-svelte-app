@@ -1,6 +1,10 @@
 // src/routes/API/engagement/caseload/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
 import { intercomRequest as intercomApiRequest } from '$lib/server/intercom';
+import {
+  INTERCOM_ATTR_CHANNEL,
+  INTERCOM_ATTR_EMPLOYER
+} from '$lib/server/intercom-attrs';
 import { randomUUID, createHash } from 'crypto';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
@@ -27,14 +31,14 @@ const CONTACT_CHUNK_SIZE = 15;
 // Composite query max ~15 filters; avoid OR-of-equals entirely.
 
 // Conversation attribute key for channel
-const CHANNEL_ATTR_KEY = 'Channel';
+const CHANNEL_ATTR_KEY = INTERCOM_ATTR_CHANNEL;
 
 // Channels that count as sessions
 const SESSION_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
 
 // Contact attribute key for client (adjust if needed)
-const CLIENT_ATTR_KEY = 'Employer';
+const CLIENT_ATTR_KEY = INTERCOM_ATTR_EMPLOYER;
 
 // ---------- Types ----------
 
