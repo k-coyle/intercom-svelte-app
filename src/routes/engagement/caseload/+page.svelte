@@ -662,7 +662,9 @@
 <div class="page">
   <h1>Caseload Dashboard</h1>
   <div class="subtitle">
-    Unique members by <strong>channel combination</strong> and <strong>time since last coaching session</strong>.
+    Unique members with at least one qualifying session (closed conversation with Channel in
+    Phone, Video Conference, Email, or Chat), grouped by <strong>channel combination</strong> and
+    <strong>time since last coaching session</strong>.
   </div>
 
   {#if error}
@@ -692,7 +694,8 @@
         <div class="muted">{progressText}</div>
       {/if}
       <div class="muted">
-        Data is cached during this session; increasing the window (up to 365) may trigger a new fetch.
+        Lookback controls how far back data is loaded. Increasing the window fetches older
+        conversations and merges them into this browser-session cache.
       </div>
     </div>
 
@@ -717,7 +720,7 @@
     </div>
 
     <div class="filter-group">
-      <label>Session types</label>
+      <label>Channels</label>
       <div class="channel-checkboxes">
         {#each allChannels as ch}
           <label>
@@ -730,7 +733,8 @@
         {/each}
       </div>
       <div class="muted">
-        Member is included if they’ve used <em>any</em> of the selected channels.
+        A member is included when they have used at least one selected channel in the loaded
+        window.
       </div>
     </div>
   </div>
@@ -748,7 +752,7 @@
         {/if}
       </div>
       <div>
-        <strong>Raw summary (all members, loaded window):</strong>
+        <strong>Raw summary (all loaded members, before filters):</strong>
         &le; 7 days: {report.summary.bucket_1} ·
         8-28 days: {report.summary.bucket_2} ·
         29–56 days: {report.summary.bucket_3} ·
@@ -798,7 +802,8 @@
 
     <h2>Members (Current Filters)</h2>
     <p class="muted">
-      Showing up to the first 500 members with their name, client, coaches, channels, and bucket.
+      Showing up to the first 500 members. Each member appears once using their most recent
+      qualifying session timestamp.
     </p>
 
     <table class="members-table">

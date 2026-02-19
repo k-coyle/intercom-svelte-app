@@ -468,7 +468,9 @@
 <div class="page">
   <h1>Sessions Dashboard</h1>
   <div class="subtitle">
-    Coaching sessions (closed conversations) by <strong>coach</strong>, <strong>client</strong>, and <strong>channel</strong>.
+    Individual qualifying sessions (closed conversations with Channel in Phone, Video Conference,
+    Email, or Chat), filterable by <strong>coach</strong>, <strong>client</strong>, and
+    <strong>channel</strong>.
   </div>
 
   {#if error}
@@ -498,7 +500,8 @@
         <div class="muted">{progressText}</div>
       {:else}
         <div class="muted">
-          Data is cached in this browser session; increasing the window appends older sessions to the cache.
+          Data is cached in this browser session; increasing the window fetches older sessions and
+          merges them into the cache.
         </div>
       {/if}
     </div>
@@ -533,7 +536,7 @@
           </label>
         {/each}
       </div>
-      <div class="muted">Session is included if its channel is selected.</div>
+      <div class="muted">A session is included when its channel checkbox is selected.</div>
     </div>
   </div>
 

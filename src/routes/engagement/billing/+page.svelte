@@ -10,8 +10,8 @@
     memberName: string | null;
     memberEmail: string | null;
     employer: string | null;
-    registrationAt: number | null; // unix seconds
-    lastSessionAt: number | null;  // unix seconds
+    registrationAt: number | null; // Enrolled Date (unix seconds)
+    lastSessionAt: number | null;  // last qualifying session timestamp (unix seconds)
     isNewParticipant: boolean;
     engagedDuringMonth: boolean;
   }
@@ -130,8 +130,8 @@
       'Name',
       'Email',
       'Employer',
-      'Registration Date',
-      'Last Coaching Call',
+      'Enrolled Date',
+      'Last Qualifying Session',
       'Is New Participant',
       'Engaged During Month'
     ];
@@ -337,8 +337,9 @@
 <div class="page">
   <h1>Billing Report</h1>
   <div class="subtitle">
-    Users who became new participants in the previous calendar month or met the engaged criteria
-    (coaching session &le; 56 days ago) for at least one day during that month.
+    Users who either became new participants in the selected month (Enrolled Date in month) or had
+    a qualifying Phone/Video session timestamp within the billing engagement window:
+    [month start - 56 days, month end).
   </div>
 
   {#if error}
@@ -350,7 +351,7 @@
       {#if loading}
         Running billing report…
       {:else if report}
-        Reload from cache / Database
+        Reload report
       {:else}
         Run billing report
       {/if}
@@ -367,9 +368,9 @@
         Export CSV (filtered)
       </button>
       <div class="muted">
-        Month: {report.monthYearLabel} (from
-        {new Date(report.monthStart).toLocaleDateString()} to
-        {new Date(report.monthEnd).toLocaleDateString()}) · Generated at
+        Month window: {report.monthYearLabel} (start
+        {new Date(report.monthStart).toLocaleDateString()} inclusive, end
+        {new Date(report.monthEnd).toLocaleDateString()} exclusive, America/New_York) · Generated at
         {new Date(report.generatedAt).toLocaleString()}
       </div>
     {/if}
@@ -405,7 +406,7 @@
         <div class="card-value">{totalBillable}</div>
       </div>
       <div class="card">
-        <div class="card-label">New participants (filtered)</div>
+        <div class="card-label">New participants in month (filtered)</div>
         <div class="card-value">{totalNewParticipants}</div>
       </div>
       <div class="card">
@@ -418,6 +419,11 @@
         <div class="muted">Engaged only: {totalEngagedOnly}</div>
       </div>
     </div>
+    <p class="muted">
+      "Engaged during month" uses last qualifying session timestamp (statistics.last_close_at,
+      then statistics.last_admin_reply_at, then created_at) from closed Phone/Video conversations.
+      Conversation source window is currently queried by created_at in [month start - 56 days, month end).
+    </p>
 
     <h2>Billable Users (top 500 rows)</h2>
     <p class="muted">
@@ -432,8 +438,8 @@
           <th>Name</th>
           <th>Email</th>
           <th>Employer</th>
-          <th>Registration Date</th>
-          <th>Last Coaching Call</th>
+          <th>Enrolled Date</th>
+          <th>Last Qualifying Session</th>
           <th>Flags</th>
         </tr>
       </thead>

@@ -106,9 +106,9 @@
 
   function bucketLabel(b: ParticipantBuckets): string {
     if (b.gt_28) return '> 28 days (Unengaged)';
-    if (b.gt_21_to_28) return '22–28 days';
-    if (b.gt_14_to_21) return '15–21 days';
-    return '≤ 14 days';
+    if (b.gt_21_to_28) return '22-28 days';
+    if (b.gt_14_to_21) return '15-21 days';
+    return '<= 14 days';
   }
 
   function exportCsv() {
@@ -465,8 +465,9 @@
 <div class="page">
   <h1>Enrolled Participants Report</h1>
   <div class="subtitle">
-    Enrolled participants bucketed by days without a coaching session, filterable by coach, client,
-    and participant start date.
+    Contacts with role=user and Enrolled Date in the loaded window, bucketed by days without a
+    qualifying session (closed conversation with Channel in Phone, Video Conference, Email, or
+    Chat).
   </div>
 
   {#if error}
@@ -493,8 +494,8 @@
         {/if}
       </button>
       <div class="muted">
-        Data is cached during this session; increasing the window (up to 365) may trigger a new
-        fetch.
+        Lookback controls loaded contacts and conversations. Increasing the window fetches older
+        records into this browser-session cache.
       </div>
     </div>
 
@@ -535,7 +536,7 @@
         <input type="date" bind:value={rangeEnd} style="margin-left: 0.25rem;" />
       </div>
       <div class="muted">
-        Uses {PARTICIPANT_DATE_ATTR_LABEL} as the participant start date.
+        Date filters apply to {PARTICIPANT_DATE_ATTR_LABEL} after the selected lookback is loaded.
       </div>
     </div>
   </div>
@@ -543,13 +544,13 @@
   {#if report}
     <div class="metrics">
       <div class="metric-card">
-        <div class="metric-label">Participants &gt; 14–21 days without a session</div>
+        <div class="metric-label">Participants 15-21 days without a session</div>
         <div class="metric-value">{countGt14To21}</div>
         <div class="muted">Filtered view</div>
       </div>
 
       <div class="metric-card">
-        <div class="metric-label">Participants 22–28 days without a session</div>
+        <div class="metric-label">Participants 22-28 days without a session</div>
         <div class="metric-value">{countGt21To28}</div>
         <div class="muted">Filtered view</div>
       </div>
@@ -558,7 +559,7 @@
         <div class="metric-label">Participants &gt; 28 days without a session (Unengaged)</div>
         <div class="metric-value">{countGt28}</div>
         <div class="muted">
-          Report-local definition; does not change global engagement status.
+          daysWithoutSession uses last session when available, otherwise days since Enrolled Date.
         </div>
       </div>
     </div>
