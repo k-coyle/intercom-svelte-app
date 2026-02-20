@@ -22,24 +22,25 @@
       name: 'Caseload Report',
       path: '/engagement/caseload',
       summary:
-        'Shows how many unique members a coach is actively working with, segmented by recency of their last coaching session and communication channel combination.',
+        'Counts unique members with at least one conversation in the loaded window, then groups them by days since their latest conversation and channel combination.',
       primaryAudience: 'Coaches, Clinical/Operations Leads, Program Managers',
       metrics: [
-        'Unique members with a coaching session in the last <=7 days',
-        'Unique members with a coaching session >7 & <=28 days',
-        'Unique members with a coaching session >28 & <=56 days ago',
-        'Unique members with a coaching session >56 days ago',
-        'Breakdown by channel combination (Phone, Video Conference, Email, Chat)'
+        'Unique members with last conversation <= 7 days ago',
+        'Unique members with last conversation 8-28 days ago',
+        'Unique members with last conversation 29-56 days ago',
+        'Unique members with last conversation > 56 days ago',
+        'Channel-combination matrix using Phone, Video Conference, Email, Chat'
       ],
       filters: [
-        'Assigned Coach',
+        'Lookback window (days, max 365)',
+        'Assigned coach',
         'Employer (Client)',
-        'Session type / channel combination (Phone, Video, Email, Chat)',
-        'Optional date lookback window'
+        'Channel checkboxes (member included if they used any selected channel)'
       ],
       notes: [
-        'Each member is counted once per row based on their most recent qualifying coaching session.',
-        'A “coaching session” is any closed conversation where Channel ∈ {Phone, Video Conference, Email, Chat}.'
+        'conversation source = closed conversations with Channel in {Phone, Video Conference, Email, Chat}.',
+        'Member recency uses latest available timestamp in this order: statistics.last_close_at, statistics.last_admin_reply_at, updated_at, created_at.',
+        'Each member is counted once using their most recent session timestamp.'
       ]
     },
     {
@@ -47,23 +48,23 @@
       name: 'Sessions Report',
       path: '/engagement/sessions',
       summary:
-        'Tracks the total number of coaching sessions over configurable time windows, rather than unique members.',
+        'Lists individual conversations (not unique members) with the same conversation rules as Caseload.',
       primaryAudience: 'Coaches, Ops, Finance, Capacity Planning',
       metrics: [
-        'Total coaching sessions in the last <=7 days',
-        'Total coaching sessions in the last 8–28 days',
-        'Total coaching sessions in the last 29–56 days',
-        'Total coaching sessions in a configurable date range'
+        'Total conversation in the filtered view',
+        'Unique members represented by the filtered conversation',
+        'conversation-level detail table sorted newest-first'
       ],
       filters: [
-        'Assigned Coach',
+        'Lookback window (days, max 365)',
+        'Assigned coach',
         'Employer (Client)',
-        'Session type / channel (Phone, Video, Email, Chat)',
-        'Date range'
+        'Channel checkboxes (Phone, Video Conference, Email, Chat)'
       ],
       notes: [
-        'This report counts every qualifying coaching session (not unique members).',
-        'Session definition matches the Caseload Report: closed conversation + Channel ∈ {Phone, Video Conference, Email, Chat}.'
+        'Data is pulled from /API/engagement/caseload using view=sessions.',
+        'Report counts every conversation row, not one row per member.',
+        'UI renders up to 2000 filtered rows in-table.'
       ]
     },
     {
@@ -71,23 +72,24 @@
       name: 'Enrolled Participants Report',
       path: '/engagement/new-participants',
       summary:
-        'Focuses on members who recently became program participants (Enrolled Date) and how quickly they receive their first coaching session.',
+        'Tracks recently enrolled participants and buckets them by days without a coaching session.',
       primaryAudience: 'Onboarding Teams, Program Managers, Clinical Leads',
       metrics: [
-        'Enrolled participants with no coaching session yet',
-        'Enrolled participants >14–21 days without a first coaching session',
-        'Enrolled participants 22–28 days without a first coaching session',
-        'Enrolled participants >28 days without a coaching session (treated as “Unengaged” for onboarding)'
+        'Participants 15-21 days without a session',
+        'Participants 22-28 days without a session',
+        'Participants > 28 days without a session (report-local Unengaged bucket)',
+        'Loaded participant total and filtered participant total'
       ],
       filters: [
-        'Assigned Coach',
+        'Lookback window (days, max 365)',
+        'Assigned coach',
         'Employer (Client)',
-        'Participant Date (Enrolled Date)',
-        'Lookback window (server-side bound on Enrolled Date + conversations)'
+        'Enrolled Date range'
       ],
       notes: [
-        '“Enrolled participant” in this report = contact whose Enrolled Date falls within the loaded lookback window.',
-        'Buckets are report-local and based on days since first/last session or since Enrolled Date if no session yet.'
+        'Enrolled participants are contacts with role=user and Enrolled Date inside the loaded lookback window.',
+        'daysWithoutSession = days since last session if any session exists; otherwise days since Enrolled Date.',
+        'Has session is shown at row level; there is no separate headline metric for no-session participants.'
       ]
     },
     {
@@ -95,63 +97,77 @@
       name: 'Billing Report',
       path: '/engagement/billing',
       summary:
-        'Identifies members who should be billable for a given calendar month, based on becoming a participant or meeting engagement criteria, and exposes them as an exportable table.',
+        'Builds a month-specific billable cohort from new participants plus members who met the billing engagement window during that month.',
       primaryAudience: 'Finance, RevOps, Program Leadership',
       metrics: [
-        'List of members who either:',
-        '  • Became enrolled participants during the previous calendar month, OR',
-        '  • Met Engaged Participant criteria for at least one day in that month',
-        'For each member: User ID, Name, Email, Enrolled Date, Last Coaching Session, Employer',
-        'Counts of total billable members, enrolled participants, engaged participants, and overlap (enrolled + engaged)'
+        'Billable users = union of: new participants in month + engaged-during-month users',
+        'Counts for total billable, new participants, engaged during month, and overlap',
+        'Per-row fields: member ID, name, email, employer, Enrolled Date, last qualifying session'
       ],
       filters: [
-        'Employer (Client) – affects on-page metrics, visible table, and CSV export'
+        'Calendar month (YYYY-MM)',
+        'Employer (Client) filter for on-page metrics/table/export'
       ],
       notes: [
-        'Billing window = previous calendar month (e.g., running in October produces a report for September).',
-        'Engaged Participant (for billing) = had a qualifying coaching session within the last 56 days relative to at least one day in the billing month.',
+        'Month window is calculated in America/New_York time and can be any selected month.',
+        'New participant = Enrolled Date inside [monthStart, monthEnd).',
+        'Engaged during month = last qualifying session timestamp inside [monthStart-56 days, monthEnd).',
+        'Billing qualifying sessions currently use closed conversations with Channel in {Phone, Video Conference}.',
+        'Billing session timestamp uses statistics.last_close_at, then statistics.last_admin_reply_at, then created_at.',
         'Table shows top 500 filtered rows; full result set is available via CSV export.',
-        'Employer is taken from the custom attribute: Employer.'
+        'Employer is read from the Employer custom attribute.'
       ]
     }
   ];
 
   const glossary = [
     {
-      term: 'Coaching session',
-      def: 'A closed conversation where the custom Channel attribute is one of: Phone, Video Conference, Email, or Chat.'
+      term: 'Conversation (reports)',
+      def: 'For Caseload, Sessions, and Enrolled Participants: a closed conversation with Channel in {Phone, Video Conference, Email, Chat}.'
+    },
+    {
+      term: 'Qualifying coaching session (sync jobs)',
+      def: 'For session/engagement sync and billing logic: Phone or Video Conference conversations; session-sync also requires Service Code in {Health Coaching 001, Disease Management 002} for first/last session updates.'
+    },
+    {
+      term: 'Last Call',
+      def: 'In session-sync, Last Call is updated from Phone conversations regardless of closed state.'
     },
     {
       term: 'Channel',
-      def: 'The conversation-level value stored in custom_attributes.Channel (e.g., Phone, Video Conference, Email, Chat). Used to distinguish between call-based vs. written interactions.'
+      def: 'Conversation custom attribute Channel (for example: Phone, Video Conference, Email, Chat).'
     },
     {
       term: 'Enrolled Date',
-      def: 'Custom contact attribute Enrolled Date. Represents the date a member became an official program participant (accepted terms and conditions). Used as the participant start date across reports and engagement logic.'
+      def: 'Contact custom attribute Enrolled Date, used as participant start date for participant and engagement workflows.'
     },
     {
       term: 'Employer (Client)',
-      def: 'Custom contact attribute Employer. Represents the client / employer responsible for the member, and is the primary “client” dimension used across reports.'
+      def: 'Contact custom attribute Employer, used as the client dimension in report filters.'
     },
     {
-      term: 'Engaged Participant',
-      def: 'A member with a last qualifying coaching (Phone or Video Conference) session ≤28 days ago, or a newly-enrolled member (Enrolled Date ≤28 days ago) with no session yet. Some billing logic also treats “engaged” as having a session within the last 56 days relative to a day in the month.'
+      term: 'Engaged (engagement-sync)',
+      def: 'If Last Coaching Session exists: <= 28 days since last session. If no last session exists: <= 28 days since Enrolled Date.'
     },
     {
-      term: 'At Risk Participant',
-      def: 'A member whose last qualifying coaching (Phone or Video Conference) session was between 29 and 56 days ago.'
+      term: 'At Risk (engagement-sync)',
+      def: '29-56 days since Last Coaching Session.'
     },
     {
-      term: 'Unengaged Participant',
-      def: 'A member whose last qualifying coaching (Phone or Video Conference) session was >56 days ago, or (when engagement has never been set) a member whose first qualifying session occurs >28 days after Enrolled Date. Some reports also treat >28 days without any session after Enrolled Date as Unengaged for onboarding.'
+      term: 'Unengaged (engagement-sync)',
+      def: '> 56 days since Last Coaching Session, or > 28 days since Enrolled Date when no session exists.'
+    },
+    {
+      term: 'Billing Engaged During Month',
+      def: 'A member whose latest billing-qualifying session timestamp falls inside [monthStart-56 days, monthEnd), where month boundaries are evaluated in America/New_York.'
     },
     {
       term: 'Assigned Coach',
-      def: 'The coach associated with the conversation (or contact) who is responsible for that member’s coaching relationship.'
+      def: 'Usually conversation admin_assignee_id; New Participants falls back to first teammate ID when assignee is missing.'
     },
     {
       term: 'Lookback window',
-      def: 'A dynamic number of days prior to “today” used by some reports to bound which conversations or sessions are included (e.g., 365-day lookback for caseload data).'
+      def: 'A report input that limits how far back conversations/contacts are loaded before local filtering.'
     }
   ];
 
@@ -159,102 +175,282 @@
 
 // ---- Background jobs / API endpoints ----
 
-type ApiEndpoint = {
-  id: string;
-  name: string;
-  path: string;        // HTTP method + URL
-  summary: string;
-  schedule: string;    // how/when it’s typically run
-  payload?: string;    // example JSON body (optional)
-  notes?: string[];
-};
+  type ApiEndpoint = {
+    id: string;
+    name: string;
+    path: string; // HTTP method + URL
+    summary: string;
+    schedule: string; // how/when it is typically run
+    payload?: string; // example JSON body (optional)
+    notes?: string[];
+  };
 
-const apiEndpoints: ApiEndpoint[] = [
-  {
-    id: 'session-sync',
-    name: 'Session Sync',
-    path: 'POST /API/engagement/session-sync',
-    summary:
-      'Indexes coaching sessions/calls from conversations and writes derived fields back to Intercom as custom attributes (e.g., last session date, first session date, etc.).',
-    schedule:
-      'Run on a schedule (cron/EventBridge). Typically: daily incremental runs; occasional longer lookback for backfills.',
-    payload: `{"lookbackDays":100,"mode":"all","dryRun":false}`,
-    notes: [
-      'This endpoint updates Intercom custom attributes.',
-      'Use a larger lookback for backfills; smaller lookbacks for daily increments.',
-      'dryRun=true should produce logs/preview without writing updates.'
-    ]
-  },
-  {
-    id: 'engagement-sync',
-    name: 'Engagement Sync',
-    path: 'POST /API/engagement/engagement-sync',
-    summary:
-      'Computes engagement classification (Engaged / At Risk / Unengaged) based on business rules and writes results to Intercom contact custom attributes.',
-    schedule:
-      'Run on a schedule after Session Sync (cron/EventBridge). Usually daily.',
-    payload: `{"dryRun":false,"enrolledLookbackDays":100}`,
-    notes: [
-      'This endpoint updates Intercom custom attributes.',
-      'Typically depends on session-related attributes already being up to date (run after Session Sync).',
-      'enrolledLookbackDays bounds how far back to consider newly/previously enrolled members.'
-    ]
-  },
-  {
-    id: 'referral-sync',
-    name: 'Referral Sync',
-    path: 'POST /API/engagement/referral-sync',
-    summary:
-      'Syncs referral-driven eligibility/program fields (maps Referral → Eligible Programs or other reporting/eligibility attributes) and writes them back to Intercom.',
-    schedule:
-      'Nightly or as needed after upstream member/referral loads. Safe to run repeatedly.',
-    payload: `{"dryRun":false}`,
-    notes: [
-      'This endpoint updates Intercom custom attributes.',
-      'Idempotent by design (re-running should not create duplicates).'
-    ]
-  },
-  {
-    id: 'report-engagement',
-    name: 'Engagement Report Stream',
-    path: 'POST /API/engagement/report/engagement',
-    summary:
-      'Generates an engagement reporting stream (report-facing dataset) used by dashboards/exports. This is reporting output, not Intercom attribute updates.',
-    schedule:
-      'Run on a schedule (monthly) or on-demand for validation. May run after Engagement Sync depending on your pipeline.',
-    payload: `{"lookbackDays":365,"dryRun":false}`,
-    notes: [
-      'This endpoint produces a reporting data stream (or report dataset) rather than updating Intercom attributes.',
-      'Use lookbackDays to control report window / recomputation scope.',
-      'If you want parity with Intercom attributes, run after Engagement Sync.'
-    ]
-  }
-];
+  const apiEndpoints: ApiEndpoint[] = [
+    {
+      id: 'session-sync-v2',
+      name: 'Session Sync',
+      path: 'POST /API/engagement/session-sync',
+      summary:
+        'Scans qualifying conversations and updates Last Coaching Session, First Session Date, and Last Call for enrolled members.',
+      schedule:
+        'Typically daily via scheduler (run first, before engagement-sync).',
+      payload: `{"lookbackDays": 30, "dryRun": true, "mode": "all"}`,
+      notes: [
+        'Session updates use closed conversations where Channel in {Phone, Video Conference} and Service Code in {"Health Coaching 001", "Disease Management 002"}.',
+        'Last Call updates from Phone conversations regardless of close state.',
+        'mode controls whether first, last/call, or both are updated.'
+      ]
+    },
+    {
+      id: 'engagement-classifier-v2',
+      name: 'Engagement Sync',
+      path: 'POST /API/engagement/engagement-sync',
+      summary:
+        'Classifies enrolled members into Engagement Status and writes Engagement Status Date when status changes.',
+      schedule:
+        'Typically daily, after session-sync.',
+      payload: `{"dryRun": true, "enrolledLookbackDays": 365}`,
+      notes: [
+        'Engaged: <= 28 days since Last Coaching Session, or <= 28 days since Enrolled Date when no session exists.',
+        'At Risk: 29-56 days since Last Coaching Session.',
+        'Unengaged: > 56 days since Last Coaching Session, or > 28 days since Enrolled Date with no session.',
+        'Current implementation classifies from Enrolled Date + Last Coaching Session.'
+      ]
+    },
+    {
+      id: 'referral-eligible-programs',
+      name: 'Referral to Eligible Programs Sync',
+      path: 'POST /API/engagement/referral-sync',
+      summary:
+        'For members with Referral = "Counter Health", sets Eligible Programs = "Smart Access".',
+      schedule:
+        'Run nightly or as needed after new members are loaded from upstream systems.',
+      notes: [
+        'Idempotent: safe to run repeatedly.',
+        'Can be extended to map additional Referral values to Eligible Programs.'
+      ]
+    },
+    {
+      id: 'engagement-export',
+      name: 'Engagement Export (CSV/JSON/File)',
+      path: 'POST /API/engagement/report/engagement',
+      summary:
+        'Exports enrolled-member data with optional filters; returns CSV stream by default or JSON/file outputs by mode.',
+      schedule:
+        'On demand from scripts or ad hoc operations.',
+      payload: `{
+  "returnMode": "stream",
+  "referral": "Counter Health",
+  "employer": "ACME Corp",
+  "employerExclusions": ["Test Employer"],
+  "enrolledDateStart": "2024-01-01",
+  "enrolledDateEnd": "2024-12-31",
+  "lastSessionStart": "2024-06-01",
+  "lastSessionEnd": "2024-06-30",
+  "engagementStatus": ["Engaged", "At Risk"],
+  "perPage": 150
+}`,
+      notes: [
+        'Supported return modes: stream (default), json, file (requires outputPath).',
+        'Filters are applied through Intercom contact search (role=user and Enrolled Date > 0 always enforced).',
+        'CSV columns follow the external spec: employee_id, name_first, name_last, member_dob, group_description, last_coaching_session, program_status, status_date, eligible_programs, registration_code.'
+      ]
+    }
+  ];
 </script>
 
-<div class="container mx-auto max-w-6xl space-y-10 px-4 py-8">
-  <!-- Header -->
-  <header class="space-y-2">
-    <h1 class="text-3xl font-semibold tracking-tight">
-      Coaching Analytics Reports
-    </h1>
-    <p class="max-w-3xl text-sm text-muted-foreground">
-      This home page documents the analytics reports built on top of the data and provides definitions
-      for key terms used across dashboards. Use it as the single source of truth for how metrics are
-      calculated and where to find them.
-    </p>
-  </header>
+<style>
+  .page {
+    padding: 1.5rem;
+    max-width: 1100px;
+    margin: 0 auto;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
 
-  <!-- Reports + Glossary -->
-  <div class="grid gap-6 lg:grid-cols-3">
-    <!-- LEFT: Reports -->
-    <section class="space-y-4 lg:col-span-2">
-      <div class="space-y-1">
-        <h2 class="text-lg font-medium">Available Reports</h2>
-        <p class="text-sm text-muted-foreground">
-          Each report uses conversations and contact attributes, with standardized definitions for coaching sessions,
-          engagement buckets, and participant status.
-        </p>
+  h1 {
+    font-size: 1.8rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .intro {
+    color: #555;
+    font-size: 0.95rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.9fr);
+    gap: 1.5rem;
+    align-items: flex-start;
+  }
+
+  .reports {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .card {
+    border-radius: 0.75rem;
+    border: 1px solid #ddd;
+    padding: 0.9rem 1rem;
+    background: #fafafa;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.25rem;
+  }
+
+  .card-title {
+    font-weight: 600;
+    font-size: 1rem;
+  }
+
+  .chip {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: #eef3ff;
+    color: #25326b;
+    white-space: nowrap;
+  }
+
+  .card-summary {
+    font-size: 0.88rem;
+    color: #555;
+    margin-bottom: 0.35rem;
+  }
+
+  .label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-top: 0.25rem;
+    margin-bottom: 0.1rem;
+    color: #444;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 1.2rem;
+  }
+
+  li {
+    font-size: 0.82rem;
+    color: #444;
+    margin-bottom: 0.1rem;
+  }
+
+  .card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.5rem;
+    gap: 0.5rem;
+  }
+
+  .open-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid #0077cc;
+    background: #0077cc;
+    color: white;
+    font-size: 0.8rem;
+    text-decoration: none;
+  }
+
+  .open-link:hover {
+    background: #005fa3;
+  }
+
+  .path {
+    font-size: 0.75rem;
+    color: #777;
+  }
+
+  .glossary {
+    border-radius: 0.75rem;
+    border: 1px solid #ddd;
+    padding: 0.9rem 1rem;
+    background: #fbfbfb;
+  }
+
+  .glossary h2 {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .glossary-item {
+    margin-bottom: 0.5rem;
+  }
+
+  .glossary-term {
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+
+  .glossary-def {
+    font-size: 0.8rem;
+    color: #444;
+  }
+
+  .section-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+  }
+
+  .section-subtitle {
+    font-size: 0.8rem;
+    color: #666;
+    margin-bottom: 0.6rem;
+  }
+
+  .api-section {
+    margin-top: 2rem;
+  }
+
+  .code-block {
+    margin-top: 0.25rem;
+    padding: 0.4rem 0.5rem;
+    border-radius: 0.4rem;
+    border: 1px solid #ddd;
+    background: #f3f3f3;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+      'Courier New', monospace;
+    font-size: 0.75rem;
+    white-space: pre-wrap;
+  }
+
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>
+
+<div class="page">
+  <h1>Coaching Analytics Reports</h1>
+  <p class="intro">
+    This home page documents the analytics reports built on top of the data and provides
+    definitions for key terms used across dashboards. Use it as the single source of truth for how
+    metrics are calculated and where to find them.
+  </p>
+
+  <div class="grid">
+    <!-- LEFT: Reports catalog -->
+    <div>
+      <div class="section-title">Available Reports</div>
+      <div class="section-subtitle">
+        Each report uses conversations and contact attributes, with report-local notes where logic
+        differs between dashboards.
       </div>
 
       <div class="space-y-4">
@@ -342,23 +538,29 @@ const apiEndpoints: ApiEndpoint[] = [
               <div class="text-sm text-muted-foreground">{g.def}</div>
             </div>
 
-            {#if i < glossary.length - 1}
-              <Separator />
-            {/if}
-          {/each}
-        </Card.Content>
-      </Card.Root>
+    <!-- RIGHT: Glossary / shared definitions -->
+    <aside class="glossary">
+      <h2>Shared Definitions</h2>
+      <p class="section-subtitle">
+        Terms below are precise to current implementation. Where behavior differs by job/report,
+        that scope is called out in the definition.
+      </p>
+
+      {#each glossary as g}
+        <div class="glossary-item">
+          <div class="glossary-term">{g.term}</div>
+          <div class="glossary-def">{g.def}</div>
+        </div>
+      {/each}
     </aside>
   </div>
 
-  <!-- Background jobs / API endpoints -->
-  <section class="space-y-4">
-    <div class="space-y-1">
-      <h2 class="text-lg font-medium">Background Jobs & API Endpoints</h2>
-      <p class="text-sm text-muted-foreground">
-        These backend endpoints keep data attributes in sync and support the reports above. They are
-        typically triggered via cron/EventBridge or from the command line, not directly from the UI.
-      </p>
+  <!-- New: Background jobs / API endpoints -->
+  <div class="api-section">
+    <div class="section-title">Background Jobs & API Endpoints</div>
+    <div class="section-subtitle">
+      These endpoints support recurring sync jobs and ad hoc exports. Some run on schedules;
+      others are invoked on demand.
     </div>
 
     <div class="space-y-4">

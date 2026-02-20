@@ -1,21 +1,26 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import {
-  INTERCOM_ACCESS_TOKEN,
-  INTERCOM_VERSION,
-  INTERCOM_API_BASE
-} from '$env/static/private';
-
-const INTERCOM_BASE_URL = INTERCOM_API_BASE || 'https://api.intercom.io';
-const INTERCOM_API_VERSION = INTERCOM_VERSION || '2.10';
+  coerceIntercomPerPage,
+  extractIntercomContacts,
+  intercomPaginate,
+  intercomRequest
+} from '$lib/server/intercom';
+import {
+  INTERCOM_ATTR_ENROLLED_DATE,
+  INTERCOM_ATTR_ENGAGEMENT_STATUS,
+  INTERCOM_ATTR_ENGAGEMENT_STATUS_DATE,
+  INTERCOM_ATTR_FIRST_SESSION,
+  INTERCOM_ATTR_LAST_SESSION
+} from '$lib/server/intercom-attrs';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 // Contact attributes (custom)
-const ATTR_ENROLLED_DATE = 'Enrolled Date';            // numeric unix seconds
-const ATTR_FIRST_SESSION = 'First Session Date';       // not needed for status, but kept for future
-const ATTR_LAST_SESSION = 'Last Coaching Session';     // numeric unix seconds
-const ATTR_ENGAGEMENT_STATUS = 'Engagement Status';    // 'Engaged' | 'At Risk' | 'Unengaged'
-const ATTR_ENGAGEMENT_STATUS_DATE = 'Engagement Status Date'; // numeric unix seconds
+const ATTR_ENROLLED_DATE = INTERCOM_ATTR_ENROLLED_DATE;            // numeric unix seconds
+const ATTR_FIRST_SESSION = INTERCOM_ATTR_FIRST_SESSION;           // not needed for status, but kept for future
+const ATTR_LAST_SESSION = INTERCOM_ATTR_LAST_SESSION;             // numeric unix seconds
+const ATTR_ENGAGEMENT_STATUS = INTERCOM_ATTR_ENGAGEMENT_STATUS;    // 'Engaged' | 'At Risk' | 'Unengaged'
+const ATTR_ENGAGEMENT_STATUS_DATE = INTERCOM_ATTR_ENGAGEMENT_STATUS_DATE; // numeric unix seconds
 
 type EngagementSyncRequest = {
   dryRun?: boolean;
@@ -28,30 +33,6 @@ type IntercomContact = {
   role?: string;
   custom_attributes?: Record<string, any>;
 };
-
-async function intercomRequest(path: string, init: RequestInit = {}): Promise<any> {
-  if (!INTERCOM_ACCESS_TOKEN) {
-    throw new Error('INTERCOM_ACCESS_TOKEN is not set');
-  }
-
-  const res = await fetch(`${INTERCOM_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${INTERCOM_ACCESS_TOKEN}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'Intercom-Version': INTERCOM_API_VERSION,
-      ...(init.headers ?? {})
-    }
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Intercom ${res.status} ${res.statusText}: ${text}`);
-  }
-
-  return res.json();
-}
 
 // ----- Helpers -----
 
@@ -105,47 +86,23 @@ async function searchParticipants(
   body: EngagementSyncRequest
 ): Promise<IntercomContact[]> {
   const query = buildParticipantQuery(nowUnix, body.enrolledLookbackDays);
-  const perPage =
-    body.perPage && body.perPage > 0 && body.perPage <= 150 ? body.perPage : 150;
+  const perPage = coerceIntercomPerPage(body.perPage);
 
-  const all: IntercomContact[] = [];
-  let pagination: any = { per_page: perPage };
-  let page = 1;
-
-  while (pagination) {
-    const payload = {
-      query,
-      pagination
-    };
-
-    const data = await intercomRequest('/contacts/search', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-
-    const contacts: IntercomContact[] = data.data ?? [];
-    const totalCount = data.total_count ?? data.total ?? 'unknown';
-
-    console.log(
-      `engagement-sync contacts page ${page}: ${contacts.length} contacts (total_count=${totalCount})`
-    );
-
-    all.push(...contacts);
-
-    if (!data.pages?.next?.starting_after) {
-      pagination = null;
-      break;
+  const participants = await intercomPaginate<IntercomContact>({
+    path: '/contacts/search',
+    body: { query },
+    perPage,
+    extractItems: extractIntercomContacts,
+    onPage: ({ page, items, totalCount }) => {
+      const count = totalCount ?? 'unknown';
+      console.log(
+        `engagement-sync contacts page ${page}: ${items} contacts (total_count=${count})`
+      );
     }
+  });
 
-    pagination = {
-      per_page: perPage,
-      starting_after: data.pages.next.starting_after
-    };
-    page += 1;
-  }
-
-  console.log(`engagement-sync: total participants fetched: ${all.length}`);
-  return all;
+  console.log(`engagement-sync: total participants fetched: ${participants.length}`);
+  return participants;
 }
 
 /**

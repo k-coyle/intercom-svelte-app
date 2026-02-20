@@ -1,0 +1,16 @@
+export const INTERCOM_ATTR_USER_ID = 'User ID';
+export const INTERCOM_ATTR_NAME = 'Name';
+export const INTERCOM_ATTR_DOB = 'Date of birth';
+export const INTERCOM_ATTR_EMPLOYER = 'Employer';
+export const INTERCOM_ATTR_LAST_SESSION = 'Last Coaching Session';
+export const INTERCOM_ATTR_ENGAGEMENT_STATUS = 'Engagement Status';
+export const INTERCOM_ATTR_ENGAGEMENT_STATUS_DATE = 'Engagement Status Date';
+export const INTERCOM_ATTR_ELIGIBLE_PROGRAMS = 'Eligible Programs';
+export const INTERCOM_ATTR_REGISTRATION_CODE = 'Registration Code';
+export const INTERCOM_ATTR_REFERRAL = 'Referral';
+export const INTERCOM_ATTR_ENROLLED_DATE = 'Enrolled Date';
+export const INTERCOM_ATTR_FIRST_SESSION = 'First Session Date';
+export const INTERCOM_ATTR_REGISTRATION_DATE = 'Registration Date';
+export const INTERCOM_ATTR_LAST_CALL = 'Last Call';
+export const INTERCOM_ATTR_CHANNEL = 'Channel';
+export const INTERCOM_ATTR_SERVICE_CODE = 'Service Code';

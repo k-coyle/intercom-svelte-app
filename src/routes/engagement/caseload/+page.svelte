@@ -1,5 +1,15 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import {
+    cleanupCaseloadJob,
+    createCaseloadJob,
+    fetchCaseloadViewPage,
+    stepCaseloadJob
+  } from '$lib/client/caseload-job';
+  import {
+    MAX_LOOKBACK_DAYS,
+    parseLookbackDays
+  } from '$lib/client/report-utils';
 
   // Keep in sync with backend
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
@@ -179,6 +189,10 @@
   // Track the server-side job for cleanup
   let activeJobId: string | null = null;
 
+  // Prevent parallel loads in a single tab
+  let runController: AbortController | null = null;
+
+
   // Filters
   let selectedLookbackDays: string = ''; // user must set this before first load
   let selectedCoachId = '';
@@ -263,7 +277,7 @@
 
     // Lookback filter (view-level) — only if user set a valid number
     const lookback = Number(selectedLookbackDays);
-    if (!Number.isNaN(lookback) && lookback > 0 && lookback <= 365) {
+    if (!Number.isNaN(lookback) && lookback > 0 && lookback <= MAX_LOOKBACK_DAYS) {
       members = members.filter((m) => m.daysSinceLastSession <= lookback);
     }
 
@@ -299,63 +313,10 @@
 
   // -------- Helpers: job backend calls --------
 
-  async function cleanupJob(jobId: string) {
-    try {
-      // keepalive helps cleanup on navigation/unload in many browsers
-      await fetch('/API/engagement/caseload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ op: 'cleanup', jobId }),
-        keepalive: true
-      });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
-
-  async function createJob(lookbackDays: number, untilLookbackDays?: number): Promise<string> {
-    const res = await fetch('/API/engagement/caseload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // backend defaults op to create if omitted; sending op explicitly is fine too
-      body: JSON.stringify({ op: 'create', lookbackDays, untilLookbackDays })
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Create job failed (HTTP ${res.status}): ${text}`);
-    }
-
-    const data = await res.json();
-    if (!data?.jobId) throw new Error('Create job failed: missing jobId');
-    return String(data.jobId);
-  }
-
-  async function stepJob(jobId: string): Promise<any> {
-    const res = await fetch('/API/engagement/caseload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op: 'step', jobId })
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Step failed (HTTP ${res.status}): ${text}`);
-    }
-
-    return res.json();
-  }
-
-  async function fetchSummary(jobId: string) {
-    const res = await fetch(`/API/engagement/caseload?jobId=${encodeURIComponent(jobId)}&view=summary`);
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Summary fetch failed (HTTP ${res.status}): ${text}`);
-    }
-    return res.json();
-  }
-
-  async function fetchAllMembers(jobId: string): Promise<CaseloadMemberRow[]> {
+  async function fetchAllMembers(
+    jobId: string,
+    signal?: AbortSignal
+  ): Promise<CaseloadMemberRow[]> {
     const members: CaseloadMemberRow[] = [];
     let offset = 0;
 
@@ -363,17 +324,13 @@
     const limit = 2000;
 
     while (true) {
-      const url =
-        `/API/engagement/caseload?jobId=${encodeURIComponent(jobId)}&view=members` +
-        `&offset=${offset}&limit=${limit}`;
-
-      const res = await fetch(url);
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Members fetch failed (HTTP ${res.status}): ${text}`);
-      }
-
-      const page = await res.json();
+      const page = await fetchCaseloadViewPage<any>(
+        jobId,
+        'members',
+        offset,
+        limit,
+        signal
+      );
       const items = (page.items ?? []) as CaseloadMemberRow[];
       members.push(...items);
 
@@ -385,23 +342,32 @@
     return members;
   }
 
-  async function runJobAndBuildReport(lookbackDays: number, untilLookbackDays?: number): Promise<CaseloadReport> {
-    // If there is a stray active job from prior attempts, clean it up.
-    if (activeJobId) {
-      cleanupJob(activeJobId);
-      activeJobId = null;
+  async function runJobAndBuildReport(
+    lookbackDays: number,
+    untilLookbackDays?: number,
+    signal?: AbortSignal
+  ): Promise<CaseloadReport> {
+    // 1) Clean up any prior job, but do it safely + await it.
+    //    (capture into a local var so it can't shift under us)
+    const previousJobId = activeJobId;
+    activeJobId = null;
+
+    if (previousJobId) {
+      await cleanupCaseloadJob(previousJobId, true);
     }
 
-    const jobId = await createJob(lookbackDays, untilLookbackDays);
-    activeJobId = jobId;
+    // 2) Track THIS run's jobId locally so we never accidentally clean up a newer run.
+    let myJobId: string | null = null;
 
     try {
+      myJobId = await createCaseloadJob(lookbackDays, untilLookbackDays, signal);
+      activeJobId = myJobId;
+
       let done = false;
 
       while (!done) {
-        const prog = await stepJob(jobId);
+        const prog = await stepCaseloadJob(myJobId, signal);
 
-        // If the job failed, stop and surface the real error
         if (prog?.status === 'error') {
           throw new Error(`Caseload job failed: ${prog?.error ?? 'Unknown error'}`);
         }
@@ -411,7 +377,6 @@
 
         done = !!prog.done;
 
-        // Optional progress text
         if (prog?.progress) {
           const p = prog.progress;
           progressText =
@@ -422,9 +387,8 @@
         if (!done) await new Promise((r) => setTimeout(r, 150));
       }
 
-      // At this point we expect it to be complete
-      const summaryPayload = await fetchSummary(jobId);
-      const members = await fetchAllMembers(jobId);
+      const summaryPayload = await fetchCaseloadViewPage<any>(myJobId, 'summary');
+      const members = await fetchAllMembers(myJobId, signal);
 
       return {
         lookbackDays: Number(summaryPayload.lookbackDays),
@@ -434,11 +398,16 @@
         members
       };
     } finally {
-      // Ensure backend job memory is released once we've built the report.
-      cleanupJob(jobId);
-      if (activeJobId === jobId) activeJobId = null;
+      // 3) Always clean up *this run's* job, and await it.
+      if (myJobId) {
+        await cleanupCaseloadJob(myJobId, true);
+      }
+
+      // 4) Only clear activeJobId if it still points at *this* job
+      if (activeJobId === myJobId) activeJobId = null;
     }
   }
+
 
 
 
@@ -446,12 +415,12 @@
   // best-effort cleanup on tab close / refresh
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', () => {
-      if (activeJobId) cleanupJob(activeJobId);
+      if (activeJobId) cleanupCaseloadJob(activeJobId, true);
     });
   }
   // cleanup on destroy (best effort)
   onDestroy(() => {
-    if (activeJobId) cleanupJob(activeJobId);
+    if (activeJobId) cleanupCaseloadJob(activeJobId, true);
   });
 
   /**
@@ -465,17 +434,21 @@
     error = null;
     progressText = null;
 
-    try {
-      const parsed = Number(selectedLookbackDays);
-      if (Number.isNaN(parsed) || parsed <= 0) {
-        throw new Error('Please enter a lookback window in days (e.g., 30, 90, 365).');
-      }
+    // Per-run controller so we can cancel any previous run in this tab
+    const myController = new AbortController();
+    const signal = myController.signal;
 
-      let requested = parsed;
-      if (requested > 365) requested = 365; // hard cap
+    // If another run is in-flight, abort it first (prevents parallel stepping / floods)
+    if (runController) {
+      runController.abort();
+    }
+    runController = myController;
+
+    try {
+      const requested = parseLookbackDays(selectedLookbackDays);
       selectedLookbackDays = String(requested);
 
-      // Reuse cached data if we already loaded a larger/equal window this session
+      // If we already loaded a larger/equal window this session, reuse cache (no backend call).
       if (cachedReport && lastLoadedLookbackDays !== null && requested <= lastLoadedLookbackDays) {
         report = cachedReport;
         buildDerivedFilters();
@@ -483,12 +456,19 @@
         return;
       }
 
-      // If we already have data loaded this session and the user increases the window,
-      // fetch ONLY the additional older slice and merge into the frontend cache.
+      // IMPORTANT: before starting a new job, clean up any prior jobId we were tracking
+      // (avoids backend holding onto old job state)
+      const prevJobId = activeJobId;
+      activeJobId = null;
+      if (prevJobId) {
+        await cleanupCaseloadJob(prevJobId, true);
+      }
+
+      // If user increases lookback, fetch ONLY the delta (older slice) and merge into frontend cache.
       if (cachedReport && lastLoadedLookbackDays !== null && requested > lastLoadedLookbackDays) {
         progressText = `Fetching additional data for days ${lastLoadedLookbackDays} → ${requested}…`;
 
-        const delta = await runJobAndBuildReport(requested, lastLoadedLookbackDays);
+        const delta = await runJobAndBuildReport(requested, lastLoadedLookbackDays, signal);
         const merged = mergeReports(cachedReport, delta, requested);
 
         cachedReport = merged;
@@ -501,7 +481,7 @@
       }
 
       // Otherwise, fetch the full window from backend (job + polling), then cache it in-memory.
-      const data = await runJobAndBuildReport(requested);
+      const data = await runJobAndBuildReport(requested, undefined, signal);
 
       cachedReport = data;
       lastLoadedLookbackDays = requested;
@@ -509,15 +489,23 @@
 
       buildDerivedFilters();
       applyFilters();
-
     } catch (e: any) {
+      // If user clicked again, the previous run will throw AbortError — don't show that as an error.
+      if (e?.name === 'AbortError') return;
+
       console.error(e);
       error = e?.message ?? String(e);
     } finally {
       loading = false;
       progressText = null;
+
+      // Only clear the controller if it still belongs to this run
+      if (runController === myController) {
+        runController = null;
+      }
     }
   }
+
 
   // Re-apply filters whenever the active report or filter state changes
   $: if (report) {
@@ -674,7 +662,9 @@
 <div class="page">
   <h1>Caseload Dashboard</h1>
   <div class="subtitle">
-    Unique members by <strong>channel combination</strong> and <strong>time since last coaching session</strong>.
+    Unique members with at least one qualifying session (closed conversation with Channel in
+    Phone, Video Conference, Email, or Chat), grouped by <strong>channel combination</strong> and
+    <strong>time since last coaching session</strong>.
   </div>
 
   {#if error}
@@ -688,7 +678,7 @@
         id="lookback"
         type="number"
         min="1"
-        max="365"
+        max={MAX_LOOKBACK_DAYS}
         bind:value={selectedLookbackDays}
       />
       <button class="reload" on:click={loadReport} disabled={loading}>
@@ -704,7 +694,8 @@
         <div class="muted">{progressText}</div>
       {/if}
       <div class="muted">
-        Data is cached during this session; increasing the window (up to 365) may trigger a new fetch.
+        Lookback controls how far back data is loaded. Increasing the window fetches older
+        conversations and merges them into this browser-session cache.
       </div>
     </div>
 
@@ -729,7 +720,7 @@
     </div>
 
     <div class="filter-group">
-      <label>Session types</label>
+      <label>Channels</label>
       <div class="channel-checkboxes">
         {#each allChannels as ch}
           <label>
@@ -742,7 +733,8 @@
         {/each}
       </div>
       <div class="muted">
-        Member is included if they’ve used <em>any</em> of the selected channels.
+        A member is included when they have used at least one selected channel in the loaded
+        window.
       </div>
     </div>
   </div>
@@ -760,7 +752,7 @@
         {/if}
       </div>
       <div>
-        <strong>Raw summary (all members, loaded window):</strong>
+        <strong>Raw summary (all loaded members, before filters):</strong>
         &le; 7 days: {report.summary.bucket_1} ·
         8-28 days: {report.summary.bucket_2} ·
         29–56 days: {report.summary.bucket_3} ·
@@ -810,7 +802,8 @@
 
     <h2>Members (Current Filters)</h2>
     <p class="muted">
-      Showing up to the first 500 members with their name, client, coaches, channels, and bucket.
+      Showing up to the first 500 members. Each member appears once using their most recent
+      qualifying session timestamp.
     </p>
 
     <table class="members-table">

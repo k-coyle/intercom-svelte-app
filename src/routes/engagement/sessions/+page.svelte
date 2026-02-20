@@ -2,6 +2,17 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { browser } from '$app/environment';
+  import {
+    cleanupCaseloadJob,
+    createCaseloadJob,
+    fetchCaseloadViewPage,
+    stepCaseloadJob
+  } from '$lib/client/caseload-job';
+  import {
+    MAX_LOOKBACK_DAYS,
+    formatUnixDate,
+    parseLookbackDays
+  } from '$lib/client/report-utils';
 
   type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
 
@@ -14,7 +25,6 @@
     coachName: string | null;
     channel: SessionChannel;
     time: number; // unix seconds
-    // backend may include daysSince; we recompute live in UI
     daysSince?: number;
   }
 
@@ -26,8 +36,8 @@
   }
 
   interface SessionsReport {
-    lookbackDays: number;     // max loaded (cached) window
-    generatedAt: string;      // time of last load/append
+    lookbackDays: number; // max loaded (cached) window
+    generatedAt: string; // time of last load/append
     sessions: SessionDetailRow[];
     summary: SessionsSummary;
   }
@@ -50,6 +60,9 @@
 
   // Track the server-side job (ephemeral; we clean up ASAP)
   let activeJobId: string | null = null;
+
+  // Prevent parallel loads in a single tab: abort any in-flight run when a new one starts.
+  let runController: AbortController | null = null;
 
   // Filters
   let selectedLookbackDays: string = ''; // user must set before first load
@@ -112,104 +125,44 @@
 
     let sessions = report.sessions;
 
-    // Coach
-    if (selectedCoachId) {
-      sessions = sessions.filter((s) => s.coachId === selectedCoachId);
-    }
+    if (selectedCoachId) sessions = sessions.filter((s) => s.coachId === selectedCoachId);
+    if (selectedClient) sessions = sessions.filter((s) => s.client === selectedClient);
 
-    // Client
-    if (selectedClient) {
-      sessions = sessions.filter((s) => s.client === selectedClient);
-    }
-
-    // Channel
     const selected = new Set(getSelectedChannels());
     if (selected.size > 0 && selected.size < allChannels.length) {
       sessions = sessions.filter((s) => selected.has(s.channel));
     }
 
-    // Lookback filter (view-level)
     const lookback = Number(selectedLookbackDays);
-    if (!Number.isNaN(lookback) && lookback > 0 && lookback <= 365) {
+    if (!Number.isNaN(lookback) && lookback > 0 && lookback <= MAX_LOOKBACK_DAYS) {
       sessions = sessions.filter((s) => daysSince(s.time) <= lookback);
     }
 
-    // Sort newest first
     filteredSessions = sessions.slice().sort((a, b) => b.time - a.time);
   }
 
-  $: if (report) {
-    applyFilters();
-  }
+  $: if (report) applyFilters();
 
   // -------- Backend helpers (job + polling) --------
 
-  async function createJob(lookbackDays: number, untilLookbackDays?: number | null): Promise<string> {
-    const body: any = { op: 'create', lookbackDays };
-
-    // Delta mode (optional): only fetch older slice when increasing lookback
-    if (untilLookbackDays != null && untilLookbackDays > 0) {
-      body.untilLookbackDays = untilLookbackDays;
-    }
-
-    const res = await fetch('/API/engagement/caseload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Create job failed (HTTP ${res.status}): ${text}`);
-    }
-
-    const json = await res.json();
-    const jobId = String(json.jobId ?? '');
-    if (!jobId) throw new Error('Create job failed: missing jobId');
-    return jobId;
-  }
-
-  async function stepJob(jobId: string): Promise<any> {
-    const res = await fetch('/API/engagement/caseload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op: 'step', jobId })
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Step failed (HTTP ${res.status}): ${text}`);
-    }
-
-    return res.json();
-  }
-
-  async function cleanupJob(jobId: string) {
-    try {
-      await fetch('/API/engagement/caseload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ op: 'cleanup', jobId })
-      });
-    } catch {
-      // best-effort
-    }
-  }
-
-  async function fetchAllSessions(jobId: string, limit = 500): Promise<SessionDetailRow[]> {
+  async function fetchAllSessions(
+    jobId: string,
+    limit = 500,
+    signal?: AbortSignal
+  ): Promise<SessionDetailRow[]> {
     let offset = 0;
     let all: SessionDetailRow[] = [];
 
     while (true) {
-      const url = `/API/engagement/caseload?jobId=${encodeURIComponent(jobId)}&view=sessions&offset=${offset}&limit=${limit}`;
-      const res = await fetch(url);
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Sessions fetch failed (HTTP ${res.status}): ${text}`);
-      }
-
-      const json = await res.json();
+      const json = await fetchCaseloadViewPage<any>(
+        jobId,
+        'sessions',
+        offset,
+        limit,
+        signal
+      );
       const items: SessionDetailRow[] = json.items ?? json.data ?? [];
       all = all.concat(items);
 
@@ -224,19 +177,18 @@
   }
 
   function sessionKey(s: SessionDetailRow): string {
-    // Stable-ish unique key (avoid PHI). Assumes same user/session/time shouldn't duplicate.
     return `${s.memberId}|${s.coachId ?? ''}|${s.channel}|${s.time}`;
   }
 
   function mergeSessions(existing: SessionDetailRow[], incoming: SessionDetailRow[]): SessionDetailRow[] {
     const map = new Map<string, SessionDetailRow>();
     for (const s of existing) map.set(sessionKey(s), s);
+
     for (const s of incoming) {
       const k = sessionKey(s);
       if (!map.has(k)) {
         map.set(k, s);
       } else {
-        // If the old record was missing fields, fill them in
         const prev = map.get(k)!;
         map.set(k, {
           ...prev,
@@ -269,17 +221,23 @@
     error = null;
     progressText = null;
 
-    try {
-      const parsed = Number(selectedLookbackDays);
-      if (Number.isNaN(parsed) || parsed <= 0) {
-        throw new Error('Please enter a lookback window in days (e.g., 30, 90, 365).');
-      }
+    // Per-run job id so we never clean up a newer run by accident
+    let myJobId: string | null = null;
+    let signal: AbortSignal | undefined;
 
-      let requested = parsed;
-      if (requested > 365) requested = 365;
+    try {
+      // Cancel any in-flight load in this tab before starting a new one.
+      if (runController) {
+        runController.abort();
+        runController = null;
+      }
+      runController = new AbortController();
+      signal = runController.signal;
+
+      const requested = parseLookbackDays(selectedLookbackDays);
       selectedLookbackDays = String(requested);
 
-      // If we already loaded a larger/equal window in this browser session, no backend call.
+      // If already loaded a larger/equal window, reuse browser cache only
       if (cachedReport && lastLoadedLookbackDays !== null && requested <= lastLoadedLookbackDays) {
         report = cachedReport;
         buildDerivedFiltersFrom(report);
@@ -287,31 +245,25 @@
         return;
       }
 
-      // If we have a cache and we are increasing lookback, fetch ONLY the delta window server-side,
-      // then append/merge into the browser cache.
-      const until = lastLoadedLookbackDays; // may be null on first load
+      const until = lastLoadedLookbackDays; // null on first load
 
-      // Clean up any prior in-flight job
-      if (activeJobId) {
-        await cleanupJob(activeJobId);
-        activeJobId = null;
-      }
+      // Clean up any prior job safely
+      const prev = activeJobId;
+      activeJobId = null;
+      if (prev) await cleanupCaseloadJob(prev);
 
-      const jobId = await createJob(requested, until);
-      activeJobId = jobId;
+      myJobId = await createCaseloadJob(requested, until, signal);
+      activeJobId = myJobId;
 
       // Poll / step until complete
       while (true) {
-        const prog = await stepJob(jobId);
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-        if (prog?.status === 'error') {
-          throw new Error(String(prog?.error ?? 'Job failed'));
-        }
-        if (prog?.status === 'cancelled') {
-          throw new Error('Job cancelled');
-        }
+        const prog = await stepCaseloadJob(myJobId, signal);
 
-        // progress text (best-effort)
+        if (prog?.status === 'error') throw new Error(String(prog?.error ?? 'Job failed'));
+        if (prog?.status === 'cancelled') throw new Error('Job cancelled');
+
         if (prog?.progress) {
           const p = prog.progress;
           progressText =
@@ -328,18 +280,12 @@
         await new Promise((r) => setTimeout(r, 150));
       }
 
-      // Fetch sessions view pages
-      const newSessions = await fetchAllSessions(jobId, 750);
+      const newSessions = await fetchAllSessions(myJobId, 750, signal);
 
-      // Merge with existing cached data (append behavior on increases)
-      let merged: SessionDetailRow[];
-      if (cachedReport?.sessions?.length) {
-        merged = mergeSessions(cachedReport.sessions, newSessions);
-      } else {
-        merged = newSessions;
-      }
+      const merged = cachedReport?.sessions?.length
+        ? mergeSessions(cachedReport.sessions, newSessions)
+        : newSessions;
 
-      // Update cache (store the max loaded window)
       const generatedAt = new Date().toISOString();
       const summary = computeSummary(requested, merged);
 
@@ -349,24 +295,30 @@
         sessions: merged,
         summary
       };
+
       lastLoadedLookbackDays = requested;
       report = cachedReport;
 
       buildDerivedFiltersFrom(report);
       applyFilters();
     } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        // A newer run replaced this one; do not surface as an error.
+        return;
+      }
       console.error(e);
       error = e?.message ?? String(e);
     } finally {
       loading = false;
 
-      // Always cleanup server job state ASAP so Node isn't acting as a cache
-      if (activeJobId) {
-        await cleanupJob(activeJobId);
-        activeJobId = null;
-      }
+      // Always cleanup server job state ASAP so Node isn't acting as a cache.
+      if (myJobId) await cleanupCaseloadJob(myJobId);
+      if (activeJobId === myJobId) activeJobId = null;
 
       progressText = null;
+
+      // Clear controller if it still belongs to this run
+      if (runController?.signal === signal) runController = null;
     }
   }
 
@@ -383,9 +335,7 @@
   }
 
   onMount(() => {
-    if (browser) {
-      window.addEventListener('beforeunload', beaconCleanup);
-    }
+    if (browser) window.addEventListener('beforeunload', beaconCleanup);
   });
 
   onDestroy(() => {
@@ -518,7 +468,9 @@
 <div class="page">
   <h1>Sessions Dashboard</h1>
   <div class="subtitle">
-    Coaching sessions (closed conversations) by <strong>coach</strong>, <strong>client</strong>, and <strong>channel</strong>.
+    Individual qualifying sessions (closed conversations with Channel in Phone, Video Conference,
+    Email, or Chat), filterable by <strong>coach</strong>, <strong>client</strong>, and
+    <strong>channel</strong>.
   </div>
 
   {#if error}
@@ -528,7 +480,13 @@
   <div class="filters">
     <div class="filter-group">
       <label for="lookback">Lookback window (days, max 365)</label>
-      <input id="lookback" type="number" min="1" max="365" bind:value={selectedLookbackDays} />
+      <input
+        id="lookback"
+        type="number"
+        min="1"
+        max={MAX_LOOKBACK_DAYS}
+        bind:value={selectedLookbackDays}
+      />
       <button class="reload" on:click={loadReport} disabled={loading}>
         {#if loading}
           Loading…
@@ -542,7 +500,8 @@
         <div class="muted">{progressText}</div>
       {:else}
         <div class="muted">
-          Data is cached in this browser session; increasing the window appends older sessions to the cache.
+          Data is cached in this browser session; increasing the window fetches older sessions and
+          merges them into the cache.
         </div>
       {/if}
     </div>
@@ -577,9 +536,7 @@
           </label>
         {/each}
       </div>
-      <div class="muted">
-        Session is included if its channel is selected.
-      </div>
+      <div class="muted">A session is included when its channel checkbox is selected.</div>
     </div>
   </div>
 
@@ -605,7 +562,7 @@
       <tbody>
         {#each filteredSessions.slice(0, 2000) as s}
           <tr>
-            <td>{new Date(s.time * 1000).toLocaleString()}</td>
+            <td>{formatUnixDate(s.time, true)}</td>
             <td><span class="pill">{s.channel}</span></td>
             <td>{s.coachName || s.coachId || '—'}</td>
             <td>

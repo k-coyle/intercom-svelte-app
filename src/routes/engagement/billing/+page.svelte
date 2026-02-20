@@ -1,11 +1,20 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
+  import {
+    downloadCsv,
+    fetchJson,
+    formatUnixDate
+  } from '$lib/client/report-utils';
+
+  const BILLING_ENDPOINT = '/API/engagement/billing';
+
   interface BillingRow {
     memberId: string;
     memberName: string | null;
     memberEmail: string | null;
     employer: string | null;
-    registrationAt: number | null; // unix seconds
-    lastSessionAt: number | null;  // unix seconds
+    registrationAt: number | null; // Enrolled Date (unix seconds)
+    lastSessionAt: number | null;  // last qualifying session timestamp (unix seconds)
     isNewParticipant: boolean;
     engagedDuringMonth: boolean;
   }
@@ -21,15 +30,22 @@
     rows: BillingRow[];
   }
 
+  interface BillingJobCreateResponse {
+    jobId: string;
+    status?: string;
+    phase?: string;
+  }
+
   let report: BillingReport | null = null;
   let cachedReport: BillingReport | null = null;
   let lastLoadedMonthLabel: string | null = null;
   let selectedMonthLabel: string = getCurrentPreviousMonthLabel(); // YYYY-MM
 
-
   let loading = false;
   let error: string | null = null;
   let loadingStage: string = '';
+  let activeJobId: string | null = null;
+  let runController: AbortController | null = null;
 
   // Employer filter
   let uniqueEmployers: string[] = [];
@@ -77,16 +93,93 @@
     uniqueEmployers = Array.from(set).sort();
   }
 
+  async function createBillingJob(
+    monthYearLabel: string,
+    signal?: AbortSignal
+  ): Promise<string> {
+    const data = await fetchJson<BillingJobCreateResponse>(BILLING_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'create', monthYearLabel }),
+      signal
+    });
+
+    const jobId = String(data?.jobId ?? '');
+    if (!jobId) throw new Error('Create billing job failed: missing jobId');
+    return jobId;
+  }
+
+  async function stepBillingJob(jobId: string, signal?: AbortSignal): Promise<any> {
+    return fetchJson<any>(BILLING_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'step', jobId }),
+      signal
+    });
+  }
+
+  async function cleanupBillingJob(jobId: string, keepalive = false): Promise<void> {
+    try {
+      await fetchJson(BILLING_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: 'cleanup', jobId }),
+        keepalive
+      });
+    } catch {
+      // best effort
+    }
+  }
+
+  async function fetchBillingSummary(jobId: string, signal?: AbortSignal): Promise<any> {
+    const params = new URLSearchParams({ jobId, view: 'summary' });
+    return fetchJson<any>(`${BILLING_ENDPOINT}?${params.toString()}`, { signal });
+  }
+
+  async function fetchAllBillingRows(
+    jobId: string,
+    limit = 750,
+    signal?: AbortSignal
+  ): Promise<BillingRow[]> {
+    let offset = 0;
+    const all: BillingRow[] = [];
+
+    while (true) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+      const params = new URLSearchParams({
+        jobId,
+        view: 'rows',
+        offset: String(offset),
+        limit: String(limit)
+      });
+
+      const json = await fetchJson<any>(`${BILLING_ENDPOINT}?${params.toString()}`, { signal });
+      const items = (json.items ?? []) as BillingRow[];
+      all.push(...items);
+
+      loadingStage = `Loaded rows: ${all.length}${json.total ? ` / ${json.total}` : ''}`;
+
+      if (json.nextOffset == null) break;
+      offset = Number(json.nextOffset);
+      if (!Number.isFinite(offset)) break;
+    }
+
+    return all;
+  }
+
   async function runReport() {
     loading = true;
     error = null;
-    loadingStage = 'Starting report…';
+    loadingStage = 'Starting billing job…';
+
+    let myJobId: string | null = null;
+    let signal: AbortSignal | undefined;
 
     try {
       const requestedMonth = selectedMonthLabel || getCurrentPreviousMonthLabel();
-      loadingStage = 'Requesting billing report from server…';
 
-      // Reuse cached report if it’s for the same selected month
+      // Reuse cached report if it's for the same selected month
       if (cachedReport && lastLoadedMonthLabel === requestedMonth) {
         report = cachedReport;
         selectedEmployer = '';
@@ -94,20 +187,60 @@
         return;
       }
 
-      const res = await fetch('/API/engagement/billing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ monthYearLabel: requestedMonth })
-      });
+      // Cancel any previous run in this tab
+      if (runController) {
+        runController.abort();
+        runController = null;
+      }
+      runController = new AbortController();
+      signal = runController.signal;
 
-      loadingStage = 'Parsing results…';
+      // cleanup previous job if still tracked
+      const prev = activeJobId;
+      activeJobId = null;
+      if (prev) await cleanupBillingJob(prev);
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
+      myJobId = await createBillingJob(requestedMonth, signal);
+      activeJobId = myJobId;
+
+      while (true) {
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+        const prog = await stepBillingJob(myJobId, signal);
+
+        if (prog?.status === 'error') throw new Error(String(prog?.error ?? 'Billing job failed'));
+        if (prog?.status === 'cancelled') throw new Error('Billing job cancelled');
+
+        if (prog?.progress) {
+          const p = prog.progress;
+          loadingStage =
+            `Phase: ${prog.phase} · Conv pages ${p.conversationPagesFetched ?? 0} · ` +
+            `Participants ${p.newParticipants ?? 0} · Contacts remaining ${p.contactsRemaining ?? 0}`;
+        } else {
+          loadingStage = `Phase: ${prog?.phase ?? 'running'}…`;
+        }
+
+        const done = !!prog?.done || prog?.status === 'complete' || prog?.phase === 'complete';
+        if (done) break;
+
+        await new Promise((r) => setTimeout(r, 150));
       }
 
-      const data: BillingReport = await res.json();
+      loadingStage = 'Fetching report output…';
+      const summary = await fetchBillingSummary(myJobId, signal);
+      const rows = await fetchAllBillingRows(myJobId, 1000, signal);
+
+      const data: BillingReport = {
+        year: Number(summary.year),
+        month: Number(summary.month),
+        monthYearLabel: String(summary.monthYearLabel),
+        monthStart: String(summary.monthStart),
+        monthEnd: String(summary.monthEnd),
+        generatedAt: String(summary.generatedAt),
+        totalRows: Number(summary.totalRows ?? rows.length),
+        rows
+      };
+
       report = data;
       cachedReport = data;
       lastLoadedMonthLabel = data.monthYearLabel;
@@ -116,79 +249,48 @@
       buildUniqueEmployers();
       loadingStage = 'Done.';
     } catch (e: any) {
+      if (e?.name === 'AbortError') return;
       console.error(e);
       error = e?.message ?? String(e);
     } finally {
       loading = false;
+
+      if (myJobId) await cleanupBillingJob(myJobId);
+      if (activeJobId === myJobId) activeJobId = null;
+      if (runController?.signal === signal) runController = null;
     }
   }
-
-
-  function formatDateFromUnix(unix: number | null): string {
-    if (unix == null) return '';
-    const d = new Date(unix * 1000);
-    if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleDateString();
-  }
-
-  function escapeCsv(value: string): string {
-    if (value.includes('"') || value.includes(',') || value.includes('\n')) {
-      return `"${value.replace(/"/g, '""')}"`;
-    }
-    return value;
-  }
-
   function exportCsv() {
     if (!report) return;
 
-    const rows = filteredRows;
     const headers = [
       'User ID',
       'Name',
       'Email',
       'Employer',
-      'Registration Date',
-      'Last Coaching Call',
+      'Enrolled Date',
+      'Last Qualifying Session',
       'Is New Participant',
       'Engaged During Month'
     ];
 
-    const lines: string[] = [];
-    lines.push(headers.map(escapeCsv).join(','));
-
-    for (const row of rows) {
-      const regDate = formatDateFromUnix(row.registrationAt);
-      const lastCall = formatDateFromUnix(row.lastSessionAt);
-
-      const values = [
+    const rows = filteredRows.map((row) => [
         row.memberId,
         row.memberName ?? '',
         row.memberEmail ?? '',
         row.employer ?? '',
-        regDate,
-        lastCall,
+        formatUnixDate(row.registrationAt),
+        formatUnixDate(row.lastSessionAt),
         row.isNewParticipant ? 'Yes' : 'No',
         row.engagedDuringMonth ? 'Yes' : 'No'
-      ];
-
-      lines.push(values.map((v) => escapeCsv(String(v))).join(','));
-    }
-
-    const csvContent = lines.join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
+      ]
+    );
 
     const monthStr = report.month.toString().padStart(2, '0');
     const suffix = selectedEmployer ? `_${selectedEmployer.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
     const filename = `billing_${report.year}-${monthStr}${suffix}.csv`;
 
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadCsv(filename, headers, rows);
   }
 
   // --- REACTIVE FILTERING & METRICS ---
@@ -210,6 +312,11 @@
     ).length;
     totalEngagedOnly = totalEngaged - totalBoth;
   }
+
+  onDestroy(() => {
+    if (runController) runController.abort();
+    if (activeJobId) cleanupBillingJob(activeJobId, true);
+  });
 </script>
 
 <style>
@@ -373,8 +480,9 @@
 <div class="page">
   <h1>Billing Report</h1>
   <div class="subtitle">
-    Users who became new participants in the previous calendar month or met the engaged criteria
-    (coaching session &le; 56 days ago) for at least one day during that month.
+    Users who either became new participants in the selected month (Enrolled Date in month) or had
+    a qualifying Phone/Video session timestamp within the billing engagement window:
+    [month start - 56 days, month end).
   </div>
 
   {#if error}
@@ -386,14 +494,13 @@
       {#if loading}
         Running billing report…
       {:else if report}
-        Reload from cache / Database
+        Reload report
       {:else}
         Run billing report
       {/if}
     </button>
 
-    </div>
-      <div class="filter-group" style="min-width: 180px;">
+    <div class="filter-group" style="min-width: 180px;">
       <label for="month">Month</label>
       <input id="month" type="month" bind:value={selectedMonthLabel} />
       <div class="muted">Select the calendar month to generate billing for.</div>
@@ -404,12 +511,17 @@
         Export CSV (filtered)
       </button>
       <div class="muted">
-        Month: {report.monthYearLabel} (from
-        {new Date(report.monthStart).toLocaleDateString()} to
-        {new Date(report.monthEnd).toLocaleDateString()}) · Generated at
+        Month window: {report.monthYearLabel} (start
+        {new Date(report.monthStart).toLocaleDateString()} inclusive, end
+        {new Date(report.monthEnd).toLocaleDateString()} exclusive, America/New_York) · Generated at
         {new Date(report.generatedAt).toLocaleString()}
       </div>
     {/if}
+  </div>
+
+  {#if loading && loadingStage}
+    <div class="muted" style="margin-bottom: 0.75rem;">{loadingStage}</div>
+  {/if}
 
   {#if report}
     <div class="filters">
@@ -437,7 +549,7 @@
         <div class="card-value">{totalBillable}</div>
       </div>
       <div class="card">
-        <div class="card-label">New participants (filtered)</div>
+        <div class="card-label">New participants in month (filtered)</div>
         <div class="card-value">{totalNewParticipants}</div>
       </div>
       <div class="card">
@@ -450,6 +562,11 @@
         <div class="muted">Engaged only: {totalEngagedOnly}</div>
       </div>
     </div>
+    <p class="muted">
+      "Engaged during month" uses last qualifying session timestamp (statistics.last_close_at,
+      then statistics.last_admin_reply_at, then created_at) from closed Phone/Video conversations.
+      Conversation source window is currently queried by created_at in [month start - 56 days, month end).
+    </p>
 
     <h2>Billable Users (top 500 rows)</h2>
     <p class="muted">
@@ -464,8 +581,8 @@
           <th>Name</th>
           <th>Email</th>
           <th>Employer</th>
-          <th>Registration Date</th>
-          <th>Last Coaching Call</th>
+          <th>Enrolled Date</th>
+          <th>Last Qualifying Session</th>
           <th>Flags</th>
         </tr>
       </thead>
@@ -476,8 +593,8 @@
             <td>{row.memberName || '(no name)'}</td>
             <td>{row.memberEmail || ''}</td>
             <td>{row.employer || '—'}</td>
-            <td>{formatDateFromUnix(row.registrationAt)}</td>
-            <td>{formatDateFromUnix(row.lastSessionAt)}</td>
+            <td>{formatUnixDate(row.registrationAt)}</td>
+            <td>{formatUnixDate(row.lastSessionAt)}</td>
             <td>
               {#if row.isNewParticipant}
                 <span class="chip chip-new">New</span>
