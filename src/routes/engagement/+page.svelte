@@ -1,9 +1,9 @@
 <script lang="ts">
-  import * as Card from "$lib/components/ui/card/index.js";
-  import { Badge } from "$lib/components/ui/badge/index.js";
-  import { Button } from "$lib/components/ui/button/index.js";
-  import * as Accordion from "$lib/components/ui/accordion/index.js";
-  import { Separator } from "$lib/components/ui/separator/index.js";
+  import * as Accordion from '$lib/components/ui/accordion/index.js';
+  import { Badge } from '$lib/components/ui/badge/index.js';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import * as Card from '$lib/components/ui/card/index.js';
+  import { Separator } from '$lib/components/ui/separator/index.js';
 
   type ReportLink = {
     id: string;
@@ -22,13 +22,13 @@
       name: 'Caseload Report',
       path: '/engagement/caseload',
       summary:
-        'Counts unique members with at least one conversation in the loaded window, then groups them by days since their latest conversation and channel combination.',
+        'Counts unique members with at least one qualifying coaching session in the loaded window, then groups them by days since their latest session and channel combination.',
       primaryAudience: 'Coaches, Clinical/Operations Leads, Program Managers',
       metrics: [
-        'Unique members with last conversation <= 7 days ago',
-        'Unique members with last conversation 8-28 days ago',
-        'Unique members with last conversation 29-56 days ago',
-        'Unique members with last conversation > 56 days ago',
+        'Unique members with last session <= 7 days ago',
+        'Unique members with last session 8-28 days ago',
+        'Unique members with last session 29-56 days ago',
+        'Unique members with last session > 56 days ago',
         'Channel-combination matrix using Phone, Video Conference, Email, Chat'
       ],
       filters: [
@@ -38,7 +38,7 @@
         'Channel checkboxes (member included if they used any selected channel)'
       ],
       notes: [
-        'conversation source = closed conversations with Channel in {Phone, Video Conference, Email, Chat}.',
+        'Session source = closed conversations with Channel in {Phone, Video Conference, Email, Chat}.',
         'Member recency uses latest available timestamp in this order: statistics.last_close_at, statistics.last_admin_reply_at, updated_at, created_at.',
         'Each member is counted once using their most recent session timestamp.'
       ]
@@ -48,12 +48,12 @@
       name: 'Sessions Report',
       path: '/engagement/sessions',
       summary:
-        'Lists individual conversations (not unique members) with the same conversation rules as Caseload.',
+        'Lists individual qualifying coaching sessions (not unique members) with the same session rules as Caseload.',
       primaryAudience: 'Coaches, Ops, Finance, Capacity Planning',
       metrics: [
-        'Total conversation in the filtered view',
-        'Unique members represented by the filtered conversation',
-        'conversation-level detail table sorted newest-first'
+        'Total sessions in the filtered view',
+        'Unique members represented by the filtered sessions',
+        'Session-level detail table sorted newest-first'
       ],
       filters: [
         'Lookback window (days, max 365)',
@@ -63,7 +63,7 @@
       ],
       notes: [
         'Data is pulled from /API/engagement/caseload using view=sessions.',
-        'Report counts every conversation row, not one row per member.',
+        'Report counts every qualifying session row, not one row per member.',
         'UI renders up to 2000 filtered rows in-table.'
       ]
     },
@@ -122,7 +122,7 @@
 
   const glossary = [
     {
-      term: 'Conversation (reports)',
+      term: 'Coaching session (reports)',
       def: 'For Caseload, Sessions, and Enrolled Participants: a closed conversation with Channel in {Phone, Video Conference, Email, Chat}.'
     },
     {
@@ -171,17 +171,13 @@
     }
   ];
 
-  // ---- Background jobs / API endpoints ----
-
-// ---- Background jobs / API endpoints ----
-
   type ApiEndpoint = {
     id: string;
     name: string;
-    path: string; // HTTP method + URL
+    path: string;
     summary: string;
-    schedule: string; // how/when it is typically run
-    payload?: string; // example JSON body (optional)
+    schedule: string;
+    payload?: string;
     notes?: string[];
   };
 
@@ -192,9 +188,8 @@
       path: 'POST /API/engagement/session-sync',
       summary:
         'Scans qualifying conversations and updates Last Coaching Session, First Session Date, and Last Call for enrolled members.',
-      schedule:
-        'Typically daily via scheduler (run first, before engagement-sync).',
-      payload: `{"lookbackDays": 30, "dryRun": true, "mode": "all"}`,
+      schedule: 'Typically daily via scheduler (run first, before engagement-sync).',
+      payload: '{"lookbackDays": 30, "dryRun": true, "mode": "all"}',
       notes: [
         'Session updates use closed conversations where Channel in {Phone, Video Conference} and Service Code in {"Health Coaching 001", "Disease Management 002"}.',
         'Last Call updates from Phone conversations regardless of close state.',
@@ -207,9 +202,8 @@
       path: 'POST /API/engagement/engagement-sync',
       summary:
         'Classifies enrolled members into Engagement Status and writes Engagement Status Date when status changes.',
-      schedule:
-        'Typically daily, after session-sync.',
-      payload: `{"dryRun": true, "enrolledLookbackDays": 365}`,
+      schedule: 'Typically daily, after session-sync.',
+      payload: '{"dryRun": true, "enrolledLookbackDays": 365}',
       notes: [
         'Engaged: <= 28 days since Last Coaching Session, or <= 28 days since Enrolled Date when no session exists.',
         'At Risk: 29-56 days since Last Coaching Session.',
@@ -223,8 +217,7 @@
       path: 'POST /API/engagement/referral-sync',
       summary:
         'For members with Referral = "Counter Health", sets Eligible Programs = "Smart Access".',
-      schedule:
-        'Run nightly or as needed after new members are loaded from upstream systems.',
+      schedule: 'Run nightly or as needed after new members are loaded from upstream systems.',
       notes: [
         'Idempotent: safe to run repeatedly.',
         'Can be extended to map additional Referral values to Eligible Programs.'
@@ -236,8 +229,7 @@
       path: 'POST /API/engagement/report/engagement',
       summary:
         'Exports enrolled-member data with optional filters; returns CSV stream by default or JSON/file outputs by mode.',
-      schedule:
-        'On demand from scripts or ad hoc operations.',
+      schedule: 'On demand from scripts or ad hoc operations.',
       payload: `{
   "returnMode": "stream",
   "referral": "Counter Health",
@@ -259,198 +251,23 @@
   ];
 </script>
 
-<style>
-  .page {
-    padding: 1.5rem;
-    max-width: 1100px;
-    margin: 0 auto;
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  }
+<div class="mx-auto max-w-7xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
+  <div class="space-y-2">
+    <h1 class="text-3xl font-semibold tracking-tight">Coaching Analytics Reports</h1>
+    <p class="max-w-4xl text-sm text-muted-foreground">
+      This page documents report definitions and backend support endpoints. Use it as the source of
+      truth for how each report is calculated and where each dataset comes from.
+    </p>
+  </div>
 
-  h1 {
-    font-size: 1.8rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .intro {
-    color: #555;
-    font-size: 0.95rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.9fr);
-    gap: 1.5rem;
-    align-items: flex-start;
-  }
-
-  .reports {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .card {
-    border-radius: 0.75rem;
-    border: 1px solid #ddd;
-    padding: 0.9rem 1rem;
-    background: #fafafa;
-  }
-
-  .card-header {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.5rem;
-    align-items: center;
-    margin-bottom: 0.25rem;
-  }
-
-  .card-title {
-    font-weight: 600;
-    font-size: 1rem;
-  }
-
-  .chip {
-    font-size: 0.75rem;
-    padding: 0.15rem 0.5rem;
-    border-radius: 999px;
-    background: #eef3ff;
-    color: #25326b;
-    white-space: nowrap;
-  }
-
-  .card-summary {
-    font-size: 0.88rem;
-    color: #555;
-    margin-bottom: 0.35rem;
-  }
-
-  .label {
-    font-size: 0.78rem;
-    font-weight: 600;
-    margin-top: 0.25rem;
-    margin-bottom: 0.1rem;
-    color: #444;
-  }
-
-  ul {
-    margin: 0;
-    padding-left: 1.2rem;
-  }
-
-  li {
-    font-size: 0.82rem;
-    color: #444;
-    margin-bottom: 0.1rem;
-  }
-
-  .card-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 0.5rem;
-    gap: 0.5rem;
-  }
-
-  .open-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.35rem 0.7rem;
-    border-radius: 999px;
-    border: 1px solid #0077cc;
-    background: #0077cc;
-    color: white;
-    font-size: 0.8rem;
-    text-decoration: none;
-  }
-
-  .open-link:hover {
-    background: #005fa3;
-  }
-
-  .path {
-    font-size: 0.75rem;
-    color: #777;
-  }
-
-  .glossary {
-    border-radius: 0.75rem;
-    border: 1px solid #ddd;
-    padding: 0.9rem 1rem;
-    background: #fbfbfb;
-  }
-
-  .glossary h2 {
-    font-size: 1rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .glossary-item {
-    margin-bottom: 0.5rem;
-  }
-
-  .glossary-term {
-    font-weight: 600;
-    font-size: 0.85rem;
-  }
-
-  .glossary-def {
-    font-size: 0.8rem;
-    color: #444;
-  }
-
-  .section-title {
-    font-size: 1.05rem;
-    font-weight: 600;
-    margin-bottom: 0.4rem;
-  }
-
-  .section-subtitle {
-    font-size: 0.8rem;
-    color: #666;
-    margin-bottom: 0.6rem;
-  }
-
-  .api-section {
-    margin-top: 2rem;
-  }
-
-  .code-block {
-    margin-top: 0.25rem;
-    padding: 0.4rem 0.5rem;
-    border-radius: 0.4rem;
-    border: 1px solid #ddd;
-    background: #f3f3f3;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
-      'Courier New', monospace;
-    font-size: 0.75rem;
-    white-space: pre-wrap;
-  }
-
-  @media (max-width: 900px) {
-    .grid {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-</style>
-
-<div class="page">
-  <h1>Coaching Analytics Reports</h1>
-  <p class="intro">
-    This home page documents the analytics reports built on top of the data and provides
-    definitions for key terms used across dashboards. Use it as the single source of truth for how
-    metrics are calculated and where to find them.
-  </p>
-
-  <div class="grid">
-    <!-- LEFT: Reports catalog -->
-    <div>
-      <div class="section-title">Available Reports</div>
-      <div class="section-subtitle">
-        Each report uses conversations and contact attributes, with report-local notes where logic
-        differs between dashboards.
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)]">
+    <section class="space-y-4">
+      <div class="space-y-1">
+        <h2 class="text-lg font-medium">Available Reports</h2>
+        <p class="text-sm text-muted-foreground">
+          Each report uses conversations and contact attributes, with report-specific notes where
+          logic differs.
+        </p>
       </div>
 
       <div class="space-y-4">
@@ -508,11 +325,7 @@
             </Card.Content>
 
             <Card.Footer class="flex flex-wrap items-center justify-between gap-2">
-              <!-- Button supports href (renders <a>) -->
-              <Button href={r.path} size="sm">
-                Open report
-              </Button>
-
+              <Button href={r.path} size="sm">Open report</Button>
               <span class="text-xs text-muted-foreground">{r.path}</span>
             </Card.Footer>
           </Card.Root>
@@ -520,14 +333,13 @@
       </div>
     </section>
 
-    <!-- RIGHT: Glossary -->
     <aside class="space-y-4">
       <Card.Root class="lg:sticky lg:top-6">
         <Card.Header class="space-y-1">
           <Card.Title>Shared Definitions</Card.Title>
           <Card.Description>
-            These terms are used consistently across all dashboards. Changes here should be reflected
-            in code and documentation together.
+            Terms below are precise to current implementation. Where behavior differs by job/report,
+            the definition calls it out.
           </Card.Description>
         </Card.Header>
 
@@ -537,30 +349,21 @@
               <div class="text-sm font-medium">{g.term}</div>
               <div class="text-sm text-muted-foreground">{g.def}</div>
             </div>
-
-    <!-- RIGHT: Glossary / shared definitions -->
-    <aside class="glossary">
-      <h2>Shared Definitions</h2>
-      <p class="section-subtitle">
-        Terms below are precise to current implementation. Where behavior differs by job/report,
-        that scope is called out in the definition.
-      </p>
-
-      {#each glossary as g}
-        <div class="glossary-item">
-          <div class="glossary-term">{g.term}</div>
-          <div class="glossary-def">{g.def}</div>
-        </div>
-      {/each}
+            {#if i < glossary.length - 1}
+              <Separator />
+            {/if}
+          {/each}
+        </Card.Content>
+      </Card.Root>
     </aside>
   </div>
 
-  <!-- New: Background jobs / API endpoints -->
-  <div class="api-section">
-    <div class="section-title">Background Jobs & API Endpoints</div>
-    <div class="section-subtitle">
-      These endpoints support recurring sync jobs and ad hoc exports. Some run on schedules;
-      others are invoked on demand.
+  <section class="space-y-4">
+    <div class="space-y-1">
+      <h2 class="text-lg font-medium">Background Jobs and API Endpoints</h2>
+      <p class="text-sm text-muted-foreground">
+        These endpoints support recurring sync jobs and ad hoc exports.
+      </p>
     </div>
 
     <div class="space-y-4">
@@ -572,7 +375,6 @@
                 <Card.Title class="text-xl">{e.name}</Card.Title>
                 <Card.Description>{e.summary}</Card.Description>
               </div>
-
               <Badge variant="outline" class="max-w-full whitespace-normal break-all font-mono text-xs">
                 {e.path}
               </Badge>
@@ -588,8 +390,7 @@
             {#if e.payload}
               <div class="space-y-2">
                 <div class="text-sm font-medium">Example payload</div>
-                <pre class="max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed text-muted-foreground">
-{e.payload}</pre>
+                <pre class="max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed text-muted-foreground">{e.payload}</pre>
               </div>
             {/if}
 
