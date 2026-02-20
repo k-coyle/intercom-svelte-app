@@ -16,13 +16,13 @@
       name: 'Caseload Report',
       path: '/engagement/caseload',
       summary:
-        'Counts unique members with at least one qualifying coaching session in the loaded window, then groups them by days since their latest session and channel combination.',
+        'Counts unique members with at least one conversation in the loaded window, then groups them by days since their latest conversation and channel combination.',
       primaryAudience: 'Coaches, Clinical/Operations Leads, Program Managers',
       metrics: [
-        'Unique members with last session <= 7 days ago',
-        'Unique members with last session 8-28 days ago',
-        'Unique members with last session 29-56 days ago',
-        'Unique members with last session > 56 days ago',
+        'Unique members with last conversation <= 7 days ago',
+        'Unique members with last conversation 8-28 days ago',
+        'Unique members with last conversation 29-56 days ago',
+        'Unique members with last conversation > 56 days ago',
         'Channel-combination matrix using Phone, Video Conference, Email, Chat'
       ],
       filters: [
@@ -32,7 +32,7 @@
         'Channel checkboxes (member included if they used any selected channel)'
       ],
       notes: [
-        'Session source = closed conversations with Channel in {Phone, Video Conference, Email, Chat}.',
+        'conversation source = closed conversations with Channel in {Phone, Video Conference, Email, Chat}.',
         'Member recency uses latest available timestamp in this order: statistics.last_close_at, statistics.last_admin_reply_at, updated_at, created_at.',
         'Each member is counted once using their most recent session timestamp.'
       ]
@@ -42,12 +42,12 @@
       name: 'Sessions Report',
       path: '/engagement/sessions',
       summary:
-        'Lists individual qualifying coaching sessions (not unique members) with the same session rules as Caseload.',
+        'Lists individual conversations (not unique members) with the same conversation rules as Caseload.',
       primaryAudience: 'Coaches, Ops, Finance, Capacity Planning',
       metrics: [
-        'Total sessions in the filtered view',
-        'Unique members represented by the filtered sessions',
-        'Session-level detail table sorted newest-first'
+        'Total conversation in the filtered view',
+        'Unique members represented by the filtered conversation',
+        'conversation-level detail table sorted newest-first'
       ],
       filters: [
         'Lookback window (days, max 365)',
@@ -57,7 +57,7 @@
       ],
       notes: [
         'Data is pulled from /API/engagement/caseload using view=sessions.',
-        'Report counts every qualifying session row, not one row per member.',
+        'Report counts every conversation row, not one row per member.',
         'UI renders up to 2000 filtered rows in-table.'
       ]
     },
@@ -116,7 +116,7 @@
 
   const glossary = [
     {
-      term: 'Coaching session (reports)',
+      term: 'Conversation (reports)',
       def: 'For Caseload, Sessions, and Enrolled Participants: a closed conversation with Channel in {Phone, Video Conference, Email, Chat}.'
     },
     {
