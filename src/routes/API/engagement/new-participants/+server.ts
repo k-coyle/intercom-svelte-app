@@ -1,17 +1,27 @@
 // src/routes/API/engagement/new-participants/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
 import {
-  extractIntercomContacts,
-  extractIntercomConversations,
-  intercomPaginate,
-  intercomRequest,
-  INTERCOM_MAX_PER_PAGE
+	extractIntercomContacts,
+	extractIntercomConversations,
+	intercomPaginate,
+	intercomRequest,
+	INTERCOM_MAX_PER_PAGE
 } from '$lib/server/intercom';
 import {
-  INTERCOM_ATTR_CHANNEL,
-  INTERCOM_ATTR_EMPLOYER,
-  INTERCOM_ATTR_ENROLLED_DATE
+	INTERCOM_ATTR_CHANNEL,
+	INTERCOM_ATTR_EMPLOYER,
+	INTERCOM_ATTR_ENROLLED_DATE
 } from '$lib/server/intercom-attrs';
+import {
+	cancelNewParticipantsJob,
+	cleanupNewParticipantsJob,
+	createNewParticipantsJob,
+	getNewParticipantsJobParticipants,
+	getNewParticipantsJobReport,
+	getNewParticipantsJobStatus,
+	getNewParticipantsJobSummary,
+	stepNewParticipantsJob
+} from '$lib/server/new-participants-job';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
@@ -33,33 +43,33 @@ const DEFAULT_LOOKBACK_DAYS = 365;
  * is within the lookback window.
  */
 async function searchEnrolledContactsSince(sinceUnix: number): Promise<any[]> {
-  const contacts = await intercomPaginate({
-    path: '/contacts/search',
-    body: {
-      query: {
-        operator: 'AND',
-        value: [
-          { field: 'role', operator: '=', value: 'user' },
-          {
-            field: `custom_attributes.${PARTICIPANT_DATE_ATTR_KEY}`,
-            operator: '>',
-            value: sinceUnix
-          }
-        ]
-      }
-    },
-    perPage: INTERCOM_MAX_PER_PAGE,
-    extractItems: extractIntercomContacts,
-    onPage: ({ page, items, totalCount }) => {
-      const count = totalCount ?? 'unknown';
-      console.log(
-        `New-participants contacts page ${page}: got ${items} contacts (total_count=${count}).`
-      );
-    }
-  });
+	const contacts = await intercomPaginate({
+		path: '/contacts/search',
+		body: {
+			query: {
+				operator: 'AND',
+				value: [
+					{ field: 'role', operator: '=', value: 'user' },
+					{
+						field: `custom_attributes.${PARTICIPANT_DATE_ATTR_KEY}`,
+						operator: '>',
+						value: sinceUnix
+					}
+				]
+			}
+		},
+		perPage: INTERCOM_MAX_PER_PAGE,
+		extractItems: extractIntercomContacts,
+		onPage: ({ page, items, totalCount }) => {
+			const count = totalCount ?? 'unknown';
+			console.log(
+				`New-participants contacts page ${page}: got ${items} contacts (total_count=${count}).`
+			);
+		}
+	});
 
-  console.log(`Total contacts with recent registration: ${contacts.length}`);
-  return contacts;
+	console.log(`Total contacts with recent registration: ${contacts.length}`);
+	return contacts;
 }
 
 /**
@@ -67,128 +77,123 @@ async function searchEnrolledContactsSince(sinceUnix: number): Promise<any[]> {
  * following pagination using pages.next.starting_after.
  */
 async function searchClosedConversationsSince(
-  sinceUnix: number,
-  contactIds: string[]
+	sinceUnix: number,
+	contactIds: string[]
 ): Promise<any[]> {
-  const conversations = await intercomPaginate({
-    path: '/conversations/search',
-    body: {
-      query: {
-        operator: 'AND',
-        value: [
-          { field: 'state', operator: '=', value: 'closed' },
-          { field: 'updated_at', operator: '>', value: sinceUnix },
-          { field: 'contact_ids', operator: 'IN', value: contactIds }
-        ]
-      }
-    },
-    perPage: INTERCOM_MAX_PER_PAGE,
-    extractItems: extractIntercomConversations,
-    onPage: ({ page, items, totalCount }) => {
-      const count = totalCount ?? 'unknown';
-      console.log(
-        `New-participants conversations page ${page}: got ${items} conversations (total_count=${count}).`
-      );
-    }
-  });
+	const conversations = await intercomPaginate({
+		path: '/conversations/search',
+		body: {
+			query: {
+				operator: 'AND',
+				value: [
+					{ field: 'state', operator: '=', value: 'closed' },
+					{ field: 'updated_at', operator: '>', value: sinceUnix },
+					{ field: 'contact_ids', operator: 'IN', value: contactIds }
+				]
+			}
+		},
+		perPage: INTERCOM_MAX_PER_PAGE,
+		extractItems: extractIntercomConversations,
+		onPage: ({ page, items, totalCount }) => {
+			const count = totalCount ?? 'unknown';
+			console.log(
+				`New-participants conversations page ${page}: got ${items} conversations (total_count=${count}).`
+			);
+		}
+	});
 
-  console.log(`Total fetched conversations for chunk: ${conversations.length}`);
-  return conversations;
+	console.log(`Total fetched conversations for chunk: ${conversations.length}`);
+	return conversations;
 }
 
-async function fetchConversationsForContacts(
-  sinceUnix: number,
-  contactIds: string[]
-) {
-  const chunkSize = 15;
-  const all: any[] = [];
+async function fetchConversationsForContacts(sinceUnix: number, contactIds: string[]) {
+	const chunkSize = 15;
+	const all: any[] = [];
 
-  if (!contactIds.length) return all;
+	if (!contactIds.length) return all;
 
-  for (let i = 0; i < contactIds.length; i += chunkSize) {
-    const chunk = contactIds.slice(i, i + chunkSize);
-    const convs = await searchClosedConversationsSince(sinceUnix, chunk);
-    all.push(...convs);
-  }
+	for (let i = 0; i < contactIds.length; i += chunkSize) {
+		const chunk = contactIds.slice(i, i + chunkSize);
+		const convs = await searchClosedConversationsSince(sinceUnix, chunk);
+		all.push(...convs);
+	}
 
-  return all;
+	return all;
 }
 
 /**
  * Fetch all admins and build an ID->name map so we can label coaches.
  */
-async function fetchAdminMap(): Promise<
-  Map<string, { name: string; email: string | null }>
-> {
-  const map = new Map<string, { name: string; email: string | null }>();
+async function fetchAdminMap(): Promise<Map<string, { name: string; email: string | null }>> {
+	const map = new Map<string, { name: string; email: string | null }>();
 
-  try {
-    const data = await intercomRequest('/admins');
-    const admins = data.admins ?? data.data ?? [];
-    for (const a of admins) {
-      const id = a.id != null ? String(a.id) : '';
-      if (!id) continue;
-      const name = (a.name as string) ?? id;
-      const email = (a.email as string) ?? null;
-      map.set(id, { name, email });
-    }
-  } catch (err: any) {
-    console.warn('Warning: unable to fetch admins map:', err?.message ?? err);
-  }
+	try {
+		const data = await intercomRequest('/admins');
+		const admins = data.admins ?? data.data ?? [];
+		for (const a of admins) {
+			const id = a.id != null ? String(a.id) : '';
+			if (!id) continue;
+			const name = (a.name as string) ?? id;
+			const email = (a.email as string) ?? null;
+			map.set(id, { name, email });
+		}
+	} catch (err: any) {
+		console.warn('Warning: unable to fetch admins map:', err?.message ?? err);
+	}
 
-  return map;
+	return map;
 }
 
 // ---------- Types ----------
 
 interface SessionRow {
-  memberId: string;
-  coachId: string | null;
-  channel: SessionChannel;
-  time: number; // unix seconds
+	memberId: string;
+	coachId: string | null;
+	channel: SessionChannel;
+	time: number; // unix seconds
 }
 
 interface ParticipantBuckets {
-  gt_14_to_21: boolean;
-  gt_21_to_28: boolean;
-  gt_28: boolean; // Unengaged for this report
+	gt_14_to_21: boolean;
+	gt_21_to_28: boolean;
+	gt_28: boolean; // Unengaged for this report
 }
 
 interface ParticipantRow {
-  memberId: string;
-  memberName: string | null;
-  memberEmail: string | null;
-  client: string | null;
-  participantAt: number | null; // Registration / Enrolled Date (unix seconds)
-  daysSinceParticipant: number | null;
+	memberId: string;
+	memberName: string | null;
+	memberEmail: string | null;
+	client: string | null;
+	participantAt: number | null; // Registration / Enrolled Date (unix seconds)
+	daysSinceParticipant: number | null;
 
-  hasSession: boolean;
-  firstSessionAt: number | null;
-  lastSessionAt: number | null;
-  daysSinceLastSession: number | null;
+	hasSession: boolean;
+	firstSessionAt: number | null;
+	lastSessionAt: number | null;
+	daysSinceLastSession: number | null;
 
-  coachIds: string[];
-  coachNames: string[];
-  channelsUsed: SessionChannel[];
+	coachIds: string[];
+	coachNames: string[];
+	channelsUsed: SessionChannel[];
 
-  // Metric used for bucket classification: days since last session,
-  // or since participant date if no session yet.
-  daysWithoutSession: number | null;
-  buckets: ParticipantBuckets;
+	// Metric used for bucket classification: days since last session,
+	// or since participant date if no session yet.
+	daysWithoutSession: number | null;
+	buckets: ParticipantBuckets;
 }
 
 interface NewParticipantsSummary {
-  gt_14_to_21: number;
-  gt_21_to_28: number;
-  gt_28: number;
+	gt_14_to_21: number;
+	gt_21_to_28: number;
+	gt_28: number;
 }
 
 interface NewParticipantsReport {
-  generatedAt: string;
-  lookbackDays: number;
-  totalParticipants: number;
-  summary: NewParticipantsSummary;
-  participants: ParticipantRow[];
+	generatedAt: string;
+	lookbackDays: number;
+	totalParticipants: number;
+	summary: NewParticipantsSummary;
+	participants: ParticipantRow[];
 }
 
 // ---------- Bucketing ----------
@@ -203,23 +208,23 @@ interface NewParticipantsReport {
  * - Otherwise                      => all false
  */
 function classifyBuckets(daysWithoutSession: number | null): ParticipantBuckets {
-  if (daysWithoutSession == null) {
-    return { gt_14_to_21: false, gt_21_to_28: false, gt_28: false };
-  }
+	if (daysWithoutSession == null) {
+		return { gt_14_to_21: false, gt_21_to_28: false, gt_28: false };
+	}
 
-  if (daysWithoutSession > 28) {
-    return { gt_14_to_21: false, gt_21_to_28: false, gt_28: true };
-  }
+	if (daysWithoutSession > 28) {
+		return { gt_14_to_21: false, gt_21_to_28: false, gt_28: true };
+	}
 
-  if (daysWithoutSession > 21) {
-    return { gt_14_to_21: false, gt_21_to_28: true, gt_28: false };
-  }
+	if (daysWithoutSession > 21) {
+		return { gt_14_to_21: false, gt_21_to_28: true, gt_28: false };
+	}
 
-  if (daysWithoutSession > 14) {
-    return { gt_14_to_21: true, gt_21_to_28: false, gt_28: false };
-  }
+	if (daysWithoutSession > 14) {
+		return { gt_14_to_21: true, gt_21_to_28: false, gt_28: false };
+	}
 
-  return { gt_14_to_21: false, gt_21_to_28: false, gt_28: false };
+	return { gt_14_to_21: false, gt_21_to_28: false, gt_28: false };
 }
 
 // ---------- Core report builder ----------
@@ -227,259 +232,408 @@ function classifyBuckets(daysWithoutSession: number | null): ParticipantBuckets 
 /**
  * Build the report: enrolled participants + buckets.
  */
-async function buildNewParticipantsReport(
-  lookbackDays: number
-): Promise<NewParticipantsReport> {
-  const nowUnix = Math.floor(Date.now() / 1000);
-  const sinceUnix = nowUnix - lookbackDays * SECONDS_PER_DAY;
+async function buildNewParticipantsReport(lookbackDays: number): Promise<NewParticipantsReport> {
+	const nowUnix = Math.floor(Date.now() / 1000);
+	const sinceUnix = nowUnix - lookbackDays * SECONDS_PER_DAY;
 
-  console.log(
-    `New-participants report: lookbackDays=${lookbackDays}, sinceUnix=${sinceUnix}`
-  );
+	console.log(`New-participants report: lookbackDays=${lookbackDays}, sinceUnix=${sinceUnix}`);
 
-  // 1) Fetch enrolled contacts
-  const contacts = await searchEnrolledContactsSince(sinceUnix);
+	// 1) Fetch enrolled contacts
+	const contacts = await searchEnrolledContactsSince(sinceUnix);
 
-  // 2) Fetch relevant closed conversations in the same window
-  const contactIds = Array.from(
-    new Set(
-      contacts
-        .map((c: any) => (c.id != null ? String(c.id) : ''))
-        .filter((id) => id.length > 0)
-    )
-  );
-  const conversations = await fetchConversationsForContacts(sinceUnix, contactIds);
+	// 2) Fetch relevant closed conversations in the same window
+	const contactIds = Array.from(
+		new Set(
+			contacts.map((c: any) => (c.id != null ? String(c.id) : '')).filter((id) => id.length > 0)
+		)
+	);
+	const conversations = await fetchConversationsForContacts(sinceUnix, contactIds);
 
-  // 3) Build session rows per contact
-  const sessionsByMember = new Map<string, SessionRow[]>();
+	// 3) Build session rows per contact
+	const sessionsByMember = new Map<string, SessionRow[]>();
 
-  for (const conv of conversations) {
-    try {
-      const attrs = conv.custom_attributes || {};
-      const channelValue = attrs[CHANNEL_ATTR_KEY] as SessionChannel | undefined;
+	for (const conv of conversations) {
+		try {
+			const attrs = conv.custom_attributes || {};
+			const channelValue = attrs[CHANNEL_ATTR_KEY] as SessionChannel | undefined;
 
-      if (!channelValue || !SESSION_CHANNELS.includes(channelValue)) {
-        continue;
-      }
+			if (!channelValue || !SESSION_CHANNELS.includes(channelValue)) {
+				continue;
+			}
 
-      const stats = conv.statistics || {};
-      const sessionTime: number | undefined =
-        stats.last_close_at ||
-        stats.last_admin_reply_at ||
-        conv.updated_at ||
-        conv.created_at;
+			const stats = conv.statistics || {};
+			const sessionTime: number | undefined =
+				stats.last_close_at || stats.last_admin_reply_at || conv.updated_at || conv.created_at;
 
-      if (!sessionTime) continue;
+			if (!sessionTime) continue;
 
-      const contactsList = conv.contacts?.contacts || [];
-      if (!contactsList.length) continue;
+			const contactsList = conv.contacts?.contacts || [];
+			if (!contactsList.length) continue;
 
-      const teammates = conv.teammates || [];
-      const adminAssigneeId =
-        conv.admin_assignee_id != null ? String(conv.admin_assignee_id) : null;
-      const teammateId =
-        teammates.length > 0 && teammates[0]?.id != null
-          ? String(teammates[0].id)
-          : null;
+			const teammates = conv.teammates || [];
+			const adminAssigneeId =
+				conv.admin_assignee_id != null ? String(conv.admin_assignee_id) : null;
+			const teammateId =
+				teammates.length > 0 && teammates[0]?.id != null ? String(teammates[0].id) : null;
 
-      const coachId = adminAssigneeId || teammateId || null;
+			const coachId = adminAssigneeId || teammateId || null;
 
-      for (const c of contactsList) {
-        if (!c?.id) continue;
-        const memberId = String(c.id);
+			for (const c of contactsList) {
+				if (!c?.id) continue;
+				const memberId = String(c.id);
 
-        const row: SessionRow = {
-          memberId,
-          coachId,
-          channel: channelValue,
-          time: sessionTime
-        };
+				const row: SessionRow = {
+					memberId,
+					coachId,
+					channel: channelValue,
+					time: sessionTime
+				};
 
-        const arr = sessionsByMember.get(memberId);
-        if (arr) {
-          arr.push(row);
-        } else {
-          sessionsByMember.set(memberId, [row]);
-        }
-      }
-    } catch (err: any) {
-      console.error(`Error processing conversation ${conv.id}:`, err?.message ?? err);
-    }
-  }
+				const arr = sessionsByMember.get(memberId);
+				if (arr) {
+					arr.push(row);
+				} else {
+					sessionsByMember.set(memberId, [row]);
+				}
+			}
+		} catch (err: any) {
+			console.error(`Error processing conversation ${conv.id}:`, err?.message ?? err);
+		}
+	}
 
-  // 4) Build admin map so we can label coaches
-  const adminMap = await fetchAdminMap();
+	// 4) Build admin map so we can label coaches
+	const adminMap = await fetchAdminMap();
 
-  // 5) Build participant rows
-  const participants: ParticipantRow[] = [];
+	// 5) Build participant rows
+	const participants: ParticipantRow[] = [];
 
-  for (const contact of contacts) {
-    try {
-      const memberId: string = String(contact.id);
-      const custom = contact.custom_attributes || {};
+	for (const contact of contacts) {
+		try {
+			const memberId: string = String(contact.id);
+			const custom = contact.custom_attributes || {};
 
-      const participantAtRaw = custom[PARTICIPANT_DATE_ATTR_KEY];
-      const participantAt =
-        typeof participantAtRaw === 'number' && participantAtRaw > 0
-          ? participantAtRaw
-          : null;
+			const participantAtRaw = custom[PARTICIPANT_DATE_ATTR_KEY];
+			const participantAt =
+				typeof participantAtRaw === 'number' && participantAtRaw > 0 ? participantAtRaw : null;
 
-      // Defensively re-check that participant date is in window
-      if (!participantAt || participantAt < sinceUnix) {
-        continue;
-      }
+			// Defensively re-check that participant date is in window
+			if (!participantAt || participantAt < sinceUnix) {
+				continue;
+			}
 
-      const daysSinceParticipant =
-        participantAt != null ? (nowUnix - participantAt) / SECONDS_PER_DAY : null;
+			const daysSinceParticipant =
+				participantAt != null ? (nowUnix - participantAt) / SECONDS_PER_DAY : null;
 
-      const client =
-        custom[CLIENT_ATTR_KEY] != null ? String(custom[CLIENT_ATTR_KEY]) : null;
+			const client = custom[CLIENT_ATTR_KEY] != null ? String(custom[CLIENT_ATTR_KEY]) : null;
 
-      const name =
-        (contact.name as string) ??
-        (contact.external_id as string) ??
-        null;
+			const name = (contact.name as string) ?? (contact.external_id as string) ?? null;
 
-      const email =
-        (contact.email as string) ??
-        (Array.isArray(contact.emails) && contact.emails.length
-          ? (contact.emails[0].value as string)
-          : null);
+			const email =
+				(contact.email as string) ??
+				(Array.isArray(contact.emails) && contact.emails.length
+					? (contact.emails[0].value as string)
+					: null);
 
-      const sessions = sessionsByMember.get(memberId) || [];
-      const hasSession = sessions.length > 0;
+			const sessions = sessionsByMember.get(memberId) || [];
+			const hasSession = sessions.length > 0;
 
-      let firstSessionAt: number | null = null;
-      let lastSessionAt: number | null = null;
-      let daysSinceLastSession: number | null = null;
+			let firstSessionAt: number | null = null;
+			let lastSessionAt: number | null = null;
+			let daysSinceLastSession: number | null = null;
 
-      const coachIdSet = new Set<string>();
-      const channelSet = new Set<SessionChannel>();
+			const coachIdSet = new Set<string>();
+			const channelSet = new Set<SessionChannel>();
 
-      if (hasSession) {
-        for (const s of sessions) {
-          if (s.time != null) {
-            if (firstSessionAt == null || s.time < firstSessionAt) {
-              firstSessionAt = s.time;
-            }
-            if (lastSessionAt == null || s.time > lastSessionAt) {
-              lastSessionAt = s.time;
-            }
-          }
-          if (s.coachId) {
-            coachIdSet.add(s.coachId);
-          }
-          if (s.channel) {
-            channelSet.add(s.channel);
-          }
-        }
+			if (hasSession) {
+				for (const s of sessions) {
+					if (s.time != null) {
+						if (firstSessionAt == null || s.time < firstSessionAt) {
+							firstSessionAt = s.time;
+						}
+						if (lastSessionAt == null || s.time > lastSessionAt) {
+							lastSessionAt = s.time;
+						}
+					}
+					if (s.coachId) {
+						coachIdSet.add(s.coachId);
+					}
+					if (s.channel) {
+						channelSet.add(s.channel);
+					}
+				}
 
-        if (lastSessionAt != null) {
-          daysSinceLastSession = (nowUnix - lastSessionAt) / SECONDS_PER_DAY;
-        }
-      }
+				if (lastSessionAt != null) {
+					daysSinceLastSession = (nowUnix - lastSessionAt) / SECONDS_PER_DAY;
+				}
+			}
 
-      let daysWithoutSession: number | null = null;
-      if (hasSession && daysSinceLastSession != null) {
-        daysWithoutSession = daysSinceLastSession;
-      } else if (!hasSession && daysSinceParticipant != null) {
-        // If no sessions yet, measure from participant date
-        daysWithoutSession = daysSinceParticipant;
-      }
+			let daysWithoutSession: number | null = null;
+			if (hasSession && daysSinceLastSession != null) {
+				daysWithoutSession = daysSinceLastSession;
+			} else if (!hasSession && daysSinceParticipant != null) {
+				// If no sessions yet, measure from participant date
+				daysWithoutSession = daysSinceParticipant;
+			}
 
-      const buckets = classifyBuckets(daysWithoutSession);
+			const buckets = classifyBuckets(daysWithoutSession);
 
-      const coachIds = Array.from(coachIdSet);
-      const coachNames = coachIds.map((id) => {
-        const admin = adminMap.get(id);
-        return admin?.name ?? id;
-      });
+			const coachIds = Array.from(coachIdSet);
+			const coachNames = coachIds.map((id) => {
+				const admin = adminMap.get(id);
+				return admin?.name ?? id;
+			});
 
-      const channelsUsed = Array.from(channelSet);
+			const channelsUsed = Array.from(channelSet);
 
-      const row: ParticipantRow = {
-        memberId,
-        memberName: name,
-        memberEmail: email,
-        client,
-        participantAt,
-        daysSinceParticipant,
-        hasSession,
-        firstSessionAt,
-        lastSessionAt,
-        daysSinceLastSession,
-        coachIds,
-        coachNames,
-        channelsUsed,
-        daysWithoutSession,
-        buckets
-      };
+			const row: ParticipantRow = {
+				memberId,
+				memberName: name,
+				memberEmail: email,
+				client,
+				participantAt,
+				daysSinceParticipant,
+				hasSession,
+				firstSessionAt,
+				lastSessionAt,
+				daysSinceLastSession,
+				coachIds,
+				coachNames,
+				channelsUsed,
+				daysWithoutSession,
+				buckets
+			};
 
-      participants.push(row);
-    } catch (err: any) {
-      console.error('Error building participant row:', err?.message ?? err);
-    }
-  }
+			participants.push(row);
+		} catch (err: any) {
+			console.error('Error building participant row:', err?.message ?? err);
+		}
+	}
 
-  // 6) Summary counts (global, unfiltered)
-  const summary: NewParticipantsSummary = {
-    gt_14_to_21: 0,
-    gt_21_to_28: 0,
-    gt_28: 0
-  };
+	// 6) Summary counts (global, unfiltered)
+	const summary: NewParticipantsSummary = {
+		gt_14_to_21: 0,
+		gt_21_to_28: 0,
+		gt_28: 0
+	};
 
-  for (const p of participants) {
-    if (p.buckets.gt_14_to_21) summary.gt_14_to_21 += 1;
-    if (p.buckets.gt_21_to_28) summary.gt_21_to_28 += 1;
-    if (p.buckets.gt_28) summary.gt_28 += 1;
-  }
+	for (const p of participants) {
+		if (p.buckets.gt_14_to_21) summary.gt_14_to_21 += 1;
+		if (p.buckets.gt_21_to_28) summary.gt_21_to_28 += 1;
+		if (p.buckets.gt_28) summary.gt_28 += 1;
+	}
 
-  const report: NewParticipantsReport = {
-    generatedAt: new Date().toISOString(),
-    lookbackDays,
-    totalParticipants: participants.length,
-    summary,
-    participants
-  };
+	const report: NewParticipantsReport = {
+		generatedAt: new Date().toISOString(),
+		lookbackDays,
+		totalParticipants: participants.length,
+		summary,
+		participants
+	};
 
-  return report;
+	return report;
 }
 
-// ---------- SvelteKit handler ----------
+// ---------- SvelteKit handlers ----------
 
-/**
- * SvelteKit POST handler.
- * Body (optional): { "lookbackDays"?: number }
- */
 export const POST: RequestHandler = async ({ request }) => {
-  try {
-    let lookbackDays = DEFAULT_LOOKBACK_DAYS;
+	try {
+		let body: any = {};
+		try {
+			body = await request.json();
+		} catch {
+			body = {};
+		}
 
-    try {
-      const raw = await request.text();
-      if (raw) {
-        const body = JSON.parse(raw);
-        if (typeof body.lookbackDays === 'number' && body.lookbackDays > 0) {
-          lookbackDays = Math.min(body.lookbackDays, DEFAULT_LOOKBACK_DAYS);
-        }
-      }
-    } catch (err) {
-      console.warn('Warning: unable to parse request body for new-participants:', err);
-    }
+		const op = body?.op != null ? String(body.op) : '';
 
-    const report = await buildNewParticipantsReport(lookbackDays);
+		// Legacy mode: no op => keep synchronous response behavior for compatibility.
+		if (!op) {
+			const lookbackRaw = Number(body?.lookbackDays ?? DEFAULT_LOOKBACK_DAYS);
+			const lookbackDays =
+				Number.isFinite(lookbackRaw) && lookbackRaw > 0
+					? Math.min(Math.floor(lookbackRaw), DEFAULT_LOOKBACK_DAYS)
+					: DEFAULT_LOOKBACK_DAYS;
 
-    return new Response(JSON.stringify(report), {
-      headers: { 'Content-Type': 'application/json' }
-    });
-  } catch (e: any) {
-    console.error('Fatal error in new-participants report:', e?.message ?? e);
-    return new Response(
-      JSON.stringify({
-        error: 'new-participants report failed',
-        details: e?.message ?? String(e)
-      }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
-  }
+			const report = await buildNewParticipantsReport(lookbackDays);
+			return new Response(JSON.stringify(report), {
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+
+		if (op === 'create') {
+			const payload = createNewParticipantsJob(body?.lookbackDays);
+			return new Response(JSON.stringify(payload), {
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+
+		if (op === 'step') {
+			const jobId = String(body?.jobId ?? '');
+			if (!jobId) {
+				return new Response(JSON.stringify({ error: 'Missing jobId' }), {
+					status: 400,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+
+			const payload = await stepNewParticipantsJob(jobId);
+			if (!payload) {
+				return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
+					status: 404,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+
+			return new Response(JSON.stringify(payload), {
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+
+		if (op === 'cancel') {
+			const jobId = String(body?.jobId ?? '');
+			if (!jobId) {
+				return new Response(JSON.stringify({ error: 'Missing jobId' }), {
+					status: 400,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+
+			const payload = cancelNewParticipantsJob(jobId);
+			if (!payload) {
+				return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
+					status: 404,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+
+			return new Response(JSON.stringify(payload), {
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+
+		if (op === 'cleanup') {
+			const jobId = String(body?.jobId ?? '');
+			if (!jobId) {
+				return new Response(JSON.stringify({ error: 'Missing jobId' }), {
+					status: 400,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+
+			const deleted = cleanupNewParticipantsJob(jobId);
+			return new Response(JSON.stringify({ jobId, deleted }), {
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+
+		return new Response(
+			JSON.stringify({
+				error: 'Unknown op',
+				details: 'Supported ops: create, step, cancel, cleanup'
+			}),
+			{ status: 400, headers: { 'Content-Type': 'application/json' } }
+		);
+	} catch (e: any) {
+		console.error('Fatal error in new-participants handler:', e?.message ?? e);
+		return new Response(
+			JSON.stringify({
+				error: 'new-participants report failed',
+				details: e?.message ?? String(e)
+			}),
+			{ status: 500, headers: { 'Content-Type': 'application/json' } }
+		);
+	}
+};
+
+export const GET: RequestHandler = async ({ url }) => {
+	const jobId = url.searchParams.get('jobId') ?? '';
+	if (!jobId) {
+		return new Response(
+			JSON.stringify({
+				error: 'Missing jobId',
+				usage:
+					'GET ?jobId=... (status) or ?jobId=...&view=summary|participants|report&offset=0&limit=500'
+			}),
+			{ status: 400, headers: { 'Content-Type': 'application/json' } }
+		);
+	}
+
+	const status = getNewParticipantsJobStatus(jobId);
+	if (!status) {
+		return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
+			status: 404,
+			headers: { 'Content-Type': 'application/json' }
+		});
+	}
+
+	const view = url.searchParams.get('view');
+	if (!view) {
+		return new Response(JSON.stringify(status), {
+			headers: { 'Content-Type': 'application/json' }
+		});
+	}
+
+	if (status.status !== 'complete') {
+		return new Response(
+			JSON.stringify({
+				error: 'Job not complete',
+				status: status.status,
+				phase: status.phase
+			}),
+			{ status: 409, headers: { 'Content-Type': 'application/json' } }
+		);
+	}
+
+	if (view === 'summary') {
+		const summary = getNewParticipantsJobSummary(jobId);
+		if (!summary) {
+			return new Response(JSON.stringify({ error: 'Summary unavailable', jobId }), {
+				status: 404,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+
+		return new Response(JSON.stringify(summary), {
+			headers: { 'Content-Type': 'application/json' }
+		});
+	}
+
+	if (view === 'participants') {
+		const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0));
+		const limit = Math.min(5000, Math.max(1, Number(url.searchParams.get('limit') ?? 500)));
+		const rows = getNewParticipantsJobParticipants(jobId, offset, limit);
+
+		if (!rows) {
+			return new Response(JSON.stringify({ error: 'Rows unavailable', jobId }), {
+				status: 404,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+
+		return new Response(JSON.stringify(rows), {
+			headers: { 'Content-Type': 'application/json' }
+		});
+	}
+
+	if (view === 'report') {
+		const report = getNewParticipantsJobReport(jobId);
+		if (!report) {
+			return new Response(JSON.stringify({ error: 'Report unavailable', jobId }), {
+				status: 404,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+
+		return new Response(JSON.stringify(report), {
+			headers: { 'Content-Type': 'application/json' }
+		});
+	}
+
+	return new Response(
+		JSON.stringify({
+			error: 'Unknown view',
+			details: 'Supported views: summary, participants, report'
+		}),
+		{ status: 400, headers: { 'Content-Type': 'application/json' } }
+	);
 };

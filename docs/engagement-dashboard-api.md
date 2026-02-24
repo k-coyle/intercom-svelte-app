@@ -70,6 +70,19 @@ Heavy report endpoints should follow the same lifecycle:
 - `POST` with `op=cleanup` -> removes in-memory job state
 - `POST` with `op=cancel` -> marks job cancelled
 
+## New Participants Endpoint Modes
+
+- Endpoint: `POST /API/engagement/new-participants`
+- Async mode (new):
+  - `op=create` with optional `lookbackDays`
+  - `op=step` with `jobId`
+  - `op=cancel` with `jobId`
+  - `op=cleanup` with `jobId`
+  - `GET /API/engagement/new-participants?jobId=...` for status
+  - `GET ...&view=summary|participants|report` for result views
+- Legacy mode (compatibility window):
+  - `POST` with no `op` still returns the full report payload synchronously.
+
 ## Compatibility Policy
 
 - Legacy response modes remain active for one release cycle after async conversion.
