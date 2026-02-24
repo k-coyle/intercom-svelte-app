@@ -1,19 +1,24 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
+	import * as Card from '$lib/components/ui/card';
+	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
 	import {
 		beaconCleanupCaseloadJob,
 		cleanupCaseloadJob,
 		fetchAllCaseloadViewItems,
 		runCaseloadJobUntilComplete
 	} from '$lib/client/caseload-job';
+	import { MAX_LOOKBACK_DAYS, parseLookbackDays } from '$lib/client/report-utils';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
 	const DEFAULT_LOOKBACK_DAYS = 90;
+	const ALL_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
 	const TABLE_LIMIT = 50;
 	const SECONDS_PER_DAY = 24 * 60 * 60;
 
-	type SessionChannel = 'Phone' | 'Video Conference' | 'Email' | 'Chat';
+	type SessionChannel = (typeof ALL_CHANNELS)[number];
 
 	type SessionDetailRow = {
 		memberId: string;
@@ -36,6 +41,21 @@
 		footerText?: string;
 	} | null = null;
 
+	let loadedSessions: SessionDetailRow[] = [];
+	let selectedLookbackDays = String(DEFAULT_LOOKBACK_DAYS);
+	let selectedCoachId = '';
+	let selectedClient = '';
+	let selectedChannels: Record<SessionChannel, boolean> = {
+		Phone: true,
+		'Video Conference': true,
+		Email: true,
+		Chat: true
+	};
+	let uniqueCoaches: Array<{ id: string; name: string }> = [];
+	let uniqueClients: string[] = [];
+	let loading = false;
+	let error: string | null = null;
+
 	let activeJobId = '';
 	let controller: AbortController | null = null;
 
@@ -54,7 +74,7 @@
 		return points;
 	}
 
-	function mapTopKpis(sessions: SessionDetailRow[]): KpiItem[] {
+	function mapTopKpis(sessions: SessionDetailRow[], lookbackDays: number): KpiItem[] {
 		const totalSessions = sessions.length;
 		const uniqueMembers = new Set(sessions.map((s) => s.memberId)).size;
 		const avgSessionsPerMember = uniqueMembers > 0 ? totalSessions / uniqueMembers : 0;
@@ -72,7 +92,7 @@
 				label: 'Total sessions (window)',
 				value: totalSessions,
 				deltaLabel: 'Lookback',
-				deltaPct: `${DEFAULT_LOOKBACK_DAYS}d`,
+				deltaPct: `${lookbackDays}d`,
 				trend: 'flat',
 				points
 			},
@@ -95,7 +115,7 @@
 		];
 	}
 
-	function mapBottomLeft(sessions: SessionDetailRow[]): string[] {
+	function mapBottomLeft(sessions: SessionDetailRow[], lookbackDays: number): string[] {
 		const uniqueMembers = new Set(sessions.map((s) => s.memberId)).size;
 		const uniqueCoaches = new Set(
 			sessions.map((s) => s.coachId).filter((id): id is string => Boolean(id))
@@ -105,8 +125,8 @@
 		).size;
 
 		return [
-			`Lookback window: last ${DEFAULT_LOOKBACK_DAYS} days`,
-			`Qualifying sessions loaded: ${sessions.length}`,
+			`Lookback window: last ${lookbackDays} days`,
+			`Filtered sessions: ${sessions.length} of ${loadedSessions.length}`,
 			`Unique members: ${uniqueMembers}`,
 			`Unique coaches: ${uniqueCoaches}`,
 			`Unique clients: ${uniqueClients}`,
@@ -154,13 +174,100 @@
 		};
 	}
 
+	function getSelectedChannels(): SessionChannel[] {
+		return ALL_CHANNELS.filter((channel) => selectedChannels[channel]);
+	}
+
+	function setChannelSelected(channel: SessionChannel, checked: boolean): void {
+		selectedChannels = { ...selectedChannels, [channel]: checked };
+	}
+
+	function buildFilterOptions(): void {
+		const coachById = new Map<string, string>();
+		const clientSet = new Set<string>();
+
+		for (const session of loadedSessions) {
+			if (session.coachId) {
+				coachById.set(session.coachId, session.coachName ?? session.coachId);
+			}
+			if (session.client) {
+				clientSet.add(session.client);
+			}
+		}
+
+		uniqueCoaches = [...coachById.entries()]
+			.map(([id, name]) => ({ id, name }))
+			.sort((a, b) => a.name.localeCompare(b.name));
+		uniqueClients = [...clientSet].sort((a, b) => a.localeCompare(b));
+	}
+
+	function filteredSessions(): SessionDetailRow[] {
+		let sessions = loadedSessions;
+
+		if (selectedCoachId) {
+			sessions = sessions.filter((s) => s.coachId === selectedCoachId);
+		}
+
+		if (selectedClient) {
+			sessions = sessions.filter((s) => s.client === selectedClient);
+		}
+
+		const channels = getSelectedChannels();
+		if (channels.length > 0 && channels.length < ALL_CHANNELS.length) {
+			const selected = new Set(channels);
+			sessions = sessions.filter((s) => selected.has(s.channel));
+		}
+
+		const parsedLookback = Number(selectedLookbackDays);
+		if (Number.isFinite(parsedLookback) && parsedLookback > 0) {
+			sessions = sessions.filter((s) => {
+				const daysSince = (Math.floor(Date.now() / 1000) - s.time) / SECONDS_PER_DAY;
+				return daysSince <= parsedLookback;
+			});
+		}
+
+		return sessions;
+	}
+
+	function recomputeDisplay(): void {
+		if (!loadedSessions.length) {
+			topKpisOverride = null;
+			bottomLeftLinesOverride = null;
+			bottomRightTableOverride = null;
+			return;
+		}
+
+		const sessions = filteredSessions();
+		const lookbackDays = Number(selectedLookbackDays) || DEFAULT_LOOKBACK_DAYS;
+		topKpisOverride = mapTopKpis(sessions, lookbackDays);
+		bottomLeftLinesOverride = mapBottomLeft(sessions, lookbackDays);
+		bottomRightTableOverride = mapTable(sessions);
+	}
+
+	function resetFilters(): void {
+		selectedCoachId = '';
+		selectedClient = '';
+		selectedChannels = {
+			Phone: true,
+			'Video Conference': true,
+			Email: true,
+			Chat: true
+		};
+	}
+
 	async function loadSessions(): Promise<void> {
 		if (!controller) return;
 
+		loading = true;
+		error = null;
+
 		let jobIdForCleanup = '';
 		try {
+			const lookbackDays = parseLookbackDays(selectedLookbackDays);
+			selectedLookbackDays = String(lookbackDays);
+
 			const { jobId } = await runCaseloadJobUntilComplete({
-				lookbackDays: DEFAULT_LOOKBACK_DAYS,
+				lookbackDays,
 				signal: controller.signal,
 				onJobCreated: (createdJobId) => {
 					activeJobId = createdJobId;
@@ -176,19 +283,30 @@
 				signal: controller.signal
 			});
 
-			topKpisOverride = mapTopKpis(sessions);
-			bottomLeftLinesOverride = mapBottomLeft(sessions);
-			bottomRightTableOverride = mapTable(sessions);
-		} catch {
+			loadedSessions = sessions;
+			buildFilterOptions();
+			recomputeDisplay();
+		} catch (e: any) {
+			error = e?.message ?? 'Unable to load sessions report.';
+			loadedSessions = [];
 			topKpisOverride = null;
 			bottomLeftLinesOverride = null;
 			bottomRightTableOverride = null;
 		} finally {
+			loading = false;
 			if (jobIdForCleanup) {
 				void cleanupCaseloadJob(jobIdForCleanup);
 				if (activeJobId === jobIdForCleanup) activeJobId = '';
 			}
 		}
+	}
+
+	$: if (loadedSessions.length) {
+		selectedCoachId;
+		selectedClient;
+		selectedLookbackDays;
+		selectedChannels;
+		recomputeDisplay();
 	}
 
 	onMount(() => {
@@ -204,10 +322,77 @@
 	});
 </script>
 
-<ReportCanvas
-	reportKey="sessions"
-	disableFallback={true}
-	{topKpisOverride}
-	{bottomLeftLinesOverride}
-	{bottomRightTableOverride}
-/>
+<div class="space-y-4">
+	<Card.Root>
+		<Card.Header class="pb-3">
+			<Card.Title class="text-base">Sessions Filters</Card.Title>
+			<Card.Description>Restore legacy sessions filtering controls.</Card.Description>
+		</Card.Header>
+		<Card.Content class="space-y-4">
+			<div class="grid gap-3 md:grid-cols-4">
+				<div class="space-y-1">
+					<label class="text-xs font-medium text-muted-foreground" for="lookbackDays">Lookback Days</label>
+					<Input id="lookbackDays" type="number" min="1" max={MAX_LOOKBACK_DAYS} bind:value={selectedLookbackDays} />
+				</div>
+				<div class="space-y-1">
+					<label class="text-xs font-medium text-muted-foreground" for="coachFilter">Coach</label>
+					<select
+						id="coachFilter"
+						class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+						bind:value={selectedCoachId}
+					>
+						<option value="">All coaches</option>
+						{#each uniqueCoaches as coach}
+							<option value={coach.id}>{coach.name}</option>
+						{/each}
+					</select>
+				</div>
+				<div class="space-y-1">
+					<label class="text-xs font-medium text-muted-foreground" for="clientFilter">Client</label>
+					<select
+						id="clientFilter"
+						class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+						bind:value={selectedClient}
+					>
+						<option value="">All clients</option>
+						{#each uniqueClients as client}
+							<option value={client}>{client}</option>
+						{/each}
+					</select>
+				</div>
+				<div class="flex items-end gap-2">
+					<Button class="w-full" onclick={loadSessions} disabled={loading}>
+						{loading ? 'Loading...' : 'Run'}
+					</Button>
+					<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset</Button>
+				</div>
+			</div>
+
+			<div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+				{#each ALL_CHANNELS as channel}
+					<label class="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+						<input
+							type="checkbox"
+							checked={selectedChannels[channel]}
+							on:change={(event) =>
+								setChannelSelected(channel, (event.currentTarget as HTMLInputElement).checked)}
+						/>
+						<span>{channel}</span>
+					</label>
+				{/each}
+			</div>
+
+			{#if error}
+				<p class="text-sm text-destructive">{error}</p>
+			{/if}
+		</Card.Content>
+	</Card.Root>
+
+	<ReportCanvas
+		reportKey="sessions"
+		disableFallback={true}
+		{topKpisOverride}
+		{bottomLeftLinesOverride}
+		{bottomRightTableOverride}
+	/>
+</div>
