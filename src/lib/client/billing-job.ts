@@ -1,5 +1,5 @@
-import { fetchJson } from '$lib/client/report-utils';
 import { fetchAllPagedViewItems, runJobUntilComplete } from '$lib/client/job-runtime';
+import { cancelJob, cleanupJob, createJob, fetchJobView, stepJob } from '$lib/client/job-api';
 
 const BILLING_ENDPOINT = '/API/engagement/billing';
 
@@ -19,46 +19,22 @@ export async function createBillingJob(
 		body.monthYearLabel = monthYearLabel.trim();
 	}
 
-	const data = await fetchJson<BillingCreateResponse>(BILLING_ENDPOINT, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(body),
-		signal
+	return createJob(BILLING_ENDPOINT, body, {
+		signal,
+		missingJobIdMessage: 'Create billing job failed: missing jobId'
 	});
-
-	const jobId = String(data?.jobId ?? '');
-	if (!jobId) throw new Error('Create billing job failed: missing jobId');
-	return jobId;
 }
 
 export async function stepBillingJob(jobId: string, signal?: AbortSignal): Promise<any> {
-	return fetchJson<any>(BILLING_ENDPOINT, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ op: 'step', jobId }),
-		signal
-	});
+	return stepJob(BILLING_ENDPOINT, jobId, signal);
 }
 
 export async function cancelBillingJob(jobId: string): Promise<any> {
-	return fetchJson<any>(BILLING_ENDPOINT, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ op: 'cancel', jobId })
-	});
+	return cancelJob(BILLING_ENDPOINT, jobId);
 }
 
 export async function cleanupBillingJob(jobId: string, keepalive = false): Promise<void> {
-	try {
-		await fetchJson(BILLING_ENDPOINT, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ op: 'cleanup', jobId }),
-			keepalive
-		});
-	} catch {
-		// Best-effort cleanup.
-	}
+	return cleanupJob(BILLING_ENDPOINT, jobId, keepalive);
 }
 
 export async function fetchBillingView<T>(
@@ -68,12 +44,7 @@ export async function fetchBillingView<T>(
 	limit?: number,
 	signal?: AbortSignal
 ): Promise<T> {
-	const params = new URLSearchParams({ jobId });
-	if (view) params.set('view', view);
-	if (offset != null) params.set('offset', String(offset));
-	if (limit != null) params.set('limit', String(limit));
-
-	return fetchJson<T>(`${BILLING_ENDPOINT}?${params.toString()}`, { signal });
+	return fetchJobView<T>(BILLING_ENDPOINT, { jobId, view, offset, limit, signal });
 }
 
 export async function runBillingJobUntilComplete(opts: {

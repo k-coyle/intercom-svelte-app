@@ -1,5 +1,5 @@
-import { fetchJson } from '$lib/client/report-utils';
 import { fetchAllPagedViewItems, runJobUntilComplete } from '$lib/client/job-runtime';
+import { cancelJob, cleanupJob, createJob, fetchJobView, stepJob } from '$lib/client/job-api';
 
 const NEW_PARTICIPANTS_ENDPOINT = '/API/engagement/new-participants';
 
@@ -18,46 +18,22 @@ export async function createNewParticipantsJob(
 		body.lookbackDays = Math.floor(lookbackDays);
 	}
 
-	const data = await fetchJson<NewParticipantsCreateResponse>(NEW_PARTICIPANTS_ENDPOINT, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(body),
-		signal
+	return createJob(NEW_PARTICIPANTS_ENDPOINT, body, {
+		signal,
+		missingJobIdMessage: 'Create job failed: missing jobId'
 	});
-
-	const jobId = String(data?.jobId ?? '');
-	if (!jobId) throw new Error('Create job failed: missing jobId');
-	return jobId;
 }
 
 export async function stepNewParticipantsJob(jobId: string, signal?: AbortSignal): Promise<any> {
-	return fetchJson<any>(NEW_PARTICIPANTS_ENDPOINT, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ op: 'step', jobId }),
-		signal
-	});
+	return stepJob(NEW_PARTICIPANTS_ENDPOINT, jobId, signal);
 }
 
 export async function cancelNewParticipantsJob(jobId: string): Promise<any> {
-	return fetchJson<any>(NEW_PARTICIPANTS_ENDPOINT, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ op: 'cancel', jobId })
-	});
+	return cancelJob(NEW_PARTICIPANTS_ENDPOINT, jobId);
 }
 
 export async function cleanupNewParticipantsJob(jobId: string, keepalive = false): Promise<void> {
-	try {
-		await fetchJson(NEW_PARTICIPANTS_ENDPOINT, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ op: 'cleanup', jobId }),
-			keepalive
-		});
-	} catch {
-		// Best-effort cleanup.
-	}
+	return cleanupJob(NEW_PARTICIPANTS_ENDPOINT, jobId, keepalive);
 }
 
 export async function fetchNewParticipantsView<T>(
@@ -67,12 +43,7 @@ export async function fetchNewParticipantsView<T>(
 	limit?: number,
 	signal?: AbortSignal
 ): Promise<T> {
-	const params = new URLSearchParams({ jobId });
-	if (view) params.set('view', view);
-	if (offset != null) params.set('offset', String(offset));
-	if (limit != null) params.set('limit', String(limit));
-
-	return fetchJson<T>(`${NEW_PARTICIPANTS_ENDPOINT}?${params.toString()}`, { signal });
+	return fetchJobView<T>(NEW_PARTICIPANTS_ENDPOINT, { jobId, view, offset, limit, signal });
 }
 
 export async function runNewParticipantsJobUntilComplete(opts: {

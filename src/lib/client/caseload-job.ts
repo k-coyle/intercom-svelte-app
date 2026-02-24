@@ -1,5 +1,5 @@
-import { fetchJson } from '$lib/client/report-utils';
 import { fetchAllPagedViewItems, runJobUntilComplete } from '$lib/client/job-runtime';
+import { createJob, fetchJobView, cleanupJob, stepJob } from '$lib/client/job-api';
 
 const CASELOAD_ENDPOINT = '/API/engagement/caseload';
 
@@ -19,44 +19,24 @@ export async function createCaseloadJob(
     body.untilLookbackDays = untilLookbackDays;
   }
 
-  const data = await fetchJson<CaseloadCreateResponse>(CASELOAD_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal
+  return createJob(CASELOAD_ENDPOINT, body, {
+    signal,
+    missingJobIdMessage: 'Create job failed: missing jobId'
   });
-
-  const jobId = String(data?.jobId ?? '');
-  if (!jobId) throw new Error('Create job failed: missing jobId');
-  return jobId;
 }
 
 export async function stepCaseloadJob(
   jobId: string,
   signal?: AbortSignal
 ): Promise<any> {
-  return fetchJson<any>(CASELOAD_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ op: 'step', jobId }),
-    signal
-  });
+  return stepJob(CASELOAD_ENDPOINT, jobId, signal);
 }
 
 export async function cleanupCaseloadJob(
   jobId: string,
   keepalive = false
 ): Promise<void> {
-  try {
-    await fetchJson(CASELOAD_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op: 'cleanup', jobId }),
-      keepalive
-    });
-  } catch {
-    // Best-effort cleanup.
-  }
+  return cleanupJob(CASELOAD_ENDPOINT, jobId, keepalive);
 }
 
 export function beaconCleanupCaseloadJob(jobId: string): boolean {
@@ -78,15 +58,7 @@ export async function fetchCaseloadViewPage<T>(
   limit?: number,
   signal?: AbortSignal
 ): Promise<T> {
-  const params = new URLSearchParams({
-    jobId,
-    view
-  });
-
-  if (offset != null) params.set('offset', String(offset));
-  if (limit != null) params.set('limit', String(limit));
-
-  return fetchJson<T>(`${CASELOAD_ENDPOINT}?${params.toString()}`, { signal });
+  return fetchJobView<T>(CASELOAD_ENDPOINT, { jobId, view, offset, limit, signal });
 }
 
 export async function runCaseloadJobUntilComplete(opts: {
