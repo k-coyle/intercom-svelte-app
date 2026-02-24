@@ -1,4 +1,5 @@
 import { fetchJson } from '$lib/client/report-utils';
+import { fetchAllPagedViewItems, runJobUntilComplete } from '$lib/client/job-runtime';
 
 const BILLING_ENDPOINT = '/API/engagement/billing';
 
@@ -82,35 +83,16 @@ export async function runBillingJobUntilComplete(opts: {
 	onJobCreated?: (jobId: string) => void;
 	onProgress?: (progress: any) => void;
 }): Promise<{ jobId: string; progress: any }> {
-	const jobId = await createBillingJob(opts.monthYearLabel, opts.signal);
-	if (opts.onJobCreated) opts.onJobCreated(jobId);
-
-	const stepDelayMs = Math.max(0, Math.floor(opts.stepDelayMs ?? 150));
-	let lastProgress: any = null;
-
-	while (true) {
-		if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-		const prog = await stepBillingJob(jobId, opts.signal);
-		lastProgress = prog;
-		if (opts.onProgress) opts.onProgress(prog);
-
-		if (prog?.status === 'error') {
-			throw new Error(String(prog?.error ?? 'Billing job failed'));
-		}
-		if (prog?.status === 'cancelled') {
-			throw new Error('Billing job cancelled');
-		}
-
-		const done = !!prog?.done || prog?.status === 'complete' || prog?.phase === 'complete';
-		if (done) break;
-
-		if (stepDelayMs > 0) {
-			await new Promise((resolve) => setTimeout(resolve, stepDelayMs));
-		}
-	}
-
-	return { jobId, progress: lastProgress };
+	return runJobUntilComplete({
+		createJob: () => createBillingJob(opts.monthYearLabel, opts.signal),
+		stepJob: (jobId) => stepBillingJob(jobId, opts.signal),
+		signal: opts.signal,
+		stepDelayMs: opts.stepDelayMs,
+		defaultErrorMessage: 'Billing job failed',
+		cancelledErrorMessage: 'Billing job cancelled',
+		onJobCreated: opts.onJobCreated,
+		onProgress: opts.onProgress
+	});
 }
 
 export async function fetchAllBillingRows<T>(opts: {
@@ -119,36 +101,13 @@ export async function fetchAllBillingRows<T>(opts: {
 	signal?: AbortSignal;
 	onPage?: (page: { loaded: number; total: number | null; nextOffset: number | null }) => void;
 }): Promise<T[]> {
-	const limit = Math.min(5000, Math.max(1, Math.floor(opts.limit ?? 750)));
-	const all: T[] = [];
-	let offset = 0;
-
-	while (true) {
-		if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-		const page = await fetchBillingView<any>(opts.jobId, 'rows', offset, limit, opts.signal);
-		const items = (page.items ?? []) as T[];
-		all.push(...items);
-
-		const nextOffset =
-			page.nextOffset == null
-				? null
-				: Number.isFinite(Number(page.nextOffset))
-					? Number(page.nextOffset)
-					: null;
-		const total = page.total == null ? null : Number(page.total);
-
-		if (opts.onPage) {
-			opts.onPage({
-				loaded: all.length,
-				total: Number.isFinite(total as number) ? (total as number) : null,
-				nextOffset
-			});
-		}
-
-		if (nextOffset == null) break;
-		offset = nextOffset;
-	}
-
-	return all;
+	return fetchAllPagedViewItems<T>({
+		limit: opts.limit,
+		defaultLimit: 750,
+		maxLimit: 5000,
+		signal: opts.signal,
+		fetchPage: (offset, limit) =>
+			fetchBillingView<any>(opts.jobId, 'rows', offset, limit, opts.signal),
+		onPage: opts.onPage
+	});
 }
