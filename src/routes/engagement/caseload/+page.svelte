@@ -7,7 +7,7 @@
 		fetchCaseloadViewPage,
 		runCaseloadJobUntilComplete
 	} from '$lib/client/caseload-job';
-	import type { TableColumn } from '$lib/components/report/engagementReportConfig';
+	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
 	const DEFAULT_LOOKBACK_DAYS = 90;
 	const TABLE_LIMIT = 50;
@@ -54,6 +54,7 @@
 	};
 
 	let bottomLeftLinesOverride: string[] | null = null;
+	let topKpisOverride: KpiItem[] | null = null;
 	let bottomRightTableOverride: {
 		title?: string;
 		columns?: TableColumn[];
@@ -95,6 +96,37 @@
 			`Bucket 2 (8-28d): ${summary.summary?.bucket_2 ?? 0}`,
 			`Bucket 3 (29-56d): ${summary.summary?.bucket_3 ?? 0}`,
 			`Bucket 4 (> 56d): ${summary.summary?.bucket_4 ?? 0}`
+		];
+	}
+
+	function buildKpi(
+		label: string,
+		value: number,
+		total: number,
+		points: number[]
+	): KpiItem {
+		const safeTotal = total > 0 ? total : 0;
+		const share = safeTotal > 0 ? `${((value / safeTotal) * 100).toFixed(1)}%` : '0.0%';
+		return {
+			label,
+			value,
+			deltaLabel: 'Share',
+			deltaPct: share,
+			trend: 'flat',
+			points
+		};
+	}
+
+	function mapTopKpis(summary: CaseloadSummaryResponse): KpiItem[] {
+		const bucket1 = summary.summary?.bucket_1 ?? 0;
+		const bucket2 = summary.summary?.bucket_2 ?? 0;
+		const bucket4 = summary.summary?.bucket_4 ?? 0;
+		const total = summary.totalMembers ?? 0;
+
+		return [
+			buildKpi('Active in <= 7 days', bucket1, total, [bucket1, bucket1, bucket1]),
+			buildKpi('8-28 days since session', bucket2, total, [bucket2, bucket2, bucket2]),
+			buildKpi('> 56 days since session', bucket4, total, [bucket4, bucket4, bucket4])
 		];
 	}
 
@@ -169,9 +201,11 @@
 				)
 			]);
 
+			topKpisOverride = mapTopKpis(summary);
 			bottomLeftLinesOverride = mapBottomLeft(summary);
 			bottomRightTableOverride = mapTable(members);
 		} catch {
+			topKpisOverride = null;
 			bottomLeftLinesOverride = null;
 			bottomRightTableOverride = null;
 		} finally {
@@ -195,4 +229,9 @@
 	});
 </script>
 
-<ReportCanvas reportKey="caseload" {bottomLeftLinesOverride} {bottomRightTableOverride} />
+<ReportCanvas
+	reportKey="caseload"
+	{topKpisOverride}
+	{bottomLeftLinesOverride}
+	{bottomRightTableOverride}
+/>
