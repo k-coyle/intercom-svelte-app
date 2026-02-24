@@ -2,9 +2,9 @@
   import { onDestroy } from 'svelte';
   import {
     cleanupBillingJob,
-    createBillingJob,
+    fetchAllBillingRows,
     fetchBillingView,
-    stepBillingJob
+    runBillingJobUntilComplete
   } from '$lib/client/billing-job';
   import {
     downloadCsv,
@@ -94,31 +94,6 @@
     return fetchBillingView<any>(jobId, 'summary', undefined, undefined, signal);
   }
 
-  async function fetchAllBillingRows(
-    jobId: string,
-    limit = 750,
-    signal?: AbortSignal
-  ): Promise<BillingRow[]> {
-    let offset = 0;
-    const all: BillingRow[] = [];
-
-    while (true) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-      const json = await fetchBillingView<any>(jobId, 'rows', offset, limit, signal);
-      const items = (json.items ?? []) as BillingRow[];
-      all.push(...items);
-
-      loadingStage = `Loaded rows: ${all.length}${json.total ? ` / ${json.total}` : ''}`;
-
-      if (json.nextOffset == null) break;
-      offset = Number(json.nextOffset);
-      if (!Number.isFinite(offset)) break;
-    }
-
-    return all;
-  }
-
   async function runReport() {
     loading = true;
     error = null;
@@ -151,35 +126,38 @@
       activeJobId = null;
       if (prev) await cleanupBillingJob(prev);
 
-      myJobId = await createBillingJob(requestedMonth, signal);
-      activeJobId = myJobId;
-
-      while (true) {
-        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-        const prog = await stepBillingJob(myJobId, signal);
-
-        if (prog?.status === 'error') throw new Error(String(prog?.error ?? 'Billing job failed'));
-        if (prog?.status === 'cancelled') throw new Error('Billing job cancelled');
-
-        if (prog?.progress) {
-          const p = prog.progress;
-          loadingStage =
-            `Phase: ${prog.phase} · Conv pages ${p.conversationPagesFetched ?? 0} · ` +
-            `Participants ${p.newParticipants ?? 0} · Contacts remaining ${p.contactsRemaining ?? 0}`;
-        } else {
-          loadingStage = `Phase: ${prog?.phase ?? 'running'}…`;
+      const run = await runBillingJobUntilComplete({
+        monthYearLabel: requestedMonth,
+        signal,
+        onJobCreated: (id) => {
+          myJobId = id;
+          activeJobId = id;
+        },
+        onProgress: (prog) => {
+          if (prog?.progress) {
+            const p = prog.progress;
+            loadingStage =
+              `Phase: ${prog.phase} · Conv pages ${p.conversationPagesFetched ?? 0} · ` +
+              `Participants ${p.newParticipants ?? 0} · Contacts remaining ${p.contactsRemaining ?? 0}`;
+          } else {
+            loadingStage = `Phase: ${prog?.phase ?? 'running'}…`;
+          }
         }
+      });
 
-        const done = !!prog?.done || prog?.status === 'complete' || prog?.phase === 'complete';
-        if (done) break;
-
-        await new Promise((r) => setTimeout(r, 150));
-      }
+      myJobId = run.jobId;
+      activeJobId = run.jobId;
 
       loadingStage = 'Fetching report output…';
       const summary = await fetchBillingSummary(myJobId, signal);
-      const rows = await fetchAllBillingRows(myJobId, 1000, signal);
+      const rows = await fetchAllBillingRows<BillingRow>({
+        jobId: myJobId,
+        limit: 1000,
+        signal,
+        onPage: ({ loaded, total }) => {
+          loadingStage = `Loaded rows: ${loaded}${total ? ` / ${total}` : ''}`;
+        }
+      });
 
       const data: BillingReport = {
         year: Number(summary.year),

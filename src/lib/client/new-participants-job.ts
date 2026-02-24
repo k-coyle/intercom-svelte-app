@@ -73,3 +73,88 @@ export async function fetchNewParticipantsView<T>(
 
 	return fetchJson<T>(`${NEW_PARTICIPANTS_ENDPOINT}?${params.toString()}`, { signal });
 }
+
+export async function runNewParticipantsJobUntilComplete(opts: {
+	lookbackDays?: number;
+	signal?: AbortSignal;
+	stepDelayMs?: number;
+	onJobCreated?: (jobId: string) => void;
+	onProgress?: (progress: any) => void;
+}): Promise<{ jobId: string; progress: any }> {
+	const jobId = await createNewParticipantsJob(opts.lookbackDays, opts.signal);
+	if (opts.onJobCreated) opts.onJobCreated(jobId);
+
+	const stepDelayMs = Math.max(0, Math.floor(opts.stepDelayMs ?? 150));
+	let lastProgress: any = null;
+
+	while (true) {
+		if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+		const prog = await stepNewParticipantsJob(jobId, opts.signal);
+		lastProgress = prog;
+		if (opts.onProgress) opts.onProgress(prog);
+
+		if (prog?.status === 'error') {
+			throw new Error(String(prog?.error ?? 'Report job failed'));
+		}
+		if (prog?.status === 'cancelled') {
+			throw new Error('Report job cancelled');
+		}
+
+		const done = !!prog?.done || prog?.status === 'complete' || prog?.phase === 'complete';
+		if (done) break;
+
+		if (stepDelayMs > 0) {
+			await new Promise((resolve) => setTimeout(resolve, stepDelayMs));
+		}
+	}
+
+	return { jobId, progress: lastProgress };
+}
+
+export async function fetchAllNewParticipantsRows<T>(opts: {
+	jobId: string;
+	limit?: number;
+	signal?: AbortSignal;
+	onPage?: (page: { loaded: number; total: number | null; nextOffset: number | null }) => void;
+}): Promise<T[]> {
+	const limit = Math.min(5000, Math.max(1, Math.floor(opts.limit ?? 1000)));
+	const all: T[] = [];
+	let offset = 0;
+
+	while (true) {
+		if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+		const page = await fetchNewParticipantsView<any>(
+			opts.jobId,
+			'participants',
+			offset,
+			limit,
+			opts.signal
+		);
+
+		const items = (page.items ?? []) as T[];
+		all.push(...items);
+
+		const nextOffset =
+			page.nextOffset == null
+				? null
+				: Number.isFinite(Number(page.nextOffset))
+					? Number(page.nextOffset)
+					: null;
+		const total = page.total == null ? null : Number(page.total);
+
+		if (opts.onPage) {
+			opts.onPage({
+				loaded: all.length,
+				total: Number.isFinite(total as number) ? (total as number) : null,
+				nextOffset
+			});
+		}
+
+		if (nextOffset == null) break;
+		offset = nextOffset;
+	}
+
+	return all;
+}

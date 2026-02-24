@@ -2,10 +2,10 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import {
-    createNewParticipantsJob,
-    fetchNewParticipantsView,
     cleanupNewParticipantsJob,
-    stepNewParticipantsJob
+    fetchAllNewParticipantsRows,
+    fetchNewParticipantsView,
+    runNewParticipantsJobUntilComplete
   } from '$lib/client/new-participants-job';
   import {
     MAX_LOOKBACK_DAYS,
@@ -243,38 +243,6 @@
     return fetchNewParticipantsView<any>(jobId, 'summary', undefined, undefined, signal);
   }
 
-  async function fetchAllParticipants(
-    jobId: string,
-    limit = 1000,
-    signal?: AbortSignal
-  ): Promise<ParticipantRow[]> {
-    let offset = 0;
-    const all: ParticipantRow[] = [];
-
-    while (true) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-      const page = await fetchNewParticipantsView<any>(
-        jobId,
-        'participants',
-        offset,
-        limit,
-        signal
-      );
-
-      const items = (page.items ?? []) as ParticipantRow[];
-      all.push(...items);
-
-      progressText = `Loaded participants: ${all.length}${page.total ? ` / ${page.total}` : ''}`;
-
-      if (page.nextOffset == null) break;
-      offset = Number(page.nextOffset);
-      if (!Number.isFinite(offset)) break;
-    }
-
-    return all;
-  }
-
   async function loadReport() {
     loading = true;
     error = null;
@@ -324,34 +292,38 @@
       if (prev) await cleanupNewParticipantsJob(prev);
 
       progressText = 'Starting report job...';
-      myJobId = await createNewParticipantsJob(requested, signal);
-      activeJobId = myJobId;
-
-      while (true) {
-        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-        const prog = await stepNewParticipantsJob(myJobId, signal);
-        if (prog?.status === 'error') throw new Error(String(prog?.error ?? 'Report job failed'));
-        if (prog?.status === 'cancelled') throw new Error('Report job cancelled');
-
-        if (prog?.progress) {
-          const p = prog.progress;
-          progressText =
-            `Phase: ${prog.phase} · participants pages ${p.participantPagesFetched ?? 0} · ` +
-            `conversation pages ${p.conversationPagesFetched ?? 0}`;
-        } else {
-          progressText = `Phase: ${prog?.phase ?? 'running'}...`;
+      const run = await runNewParticipantsJobUntilComplete({
+        lookbackDays: requested,
+        signal,
+        onJobCreated: (id) => {
+          myJobId = id;
+          activeJobId = id;
+        },
+        onProgress: (prog) => {
+          if (prog?.progress) {
+            const p = prog.progress;
+            progressText =
+              `Phase: ${prog.phase} · participants pages ${p.participantPagesFetched ?? 0} · ` +
+              `conversation pages ${p.conversationPagesFetched ?? 0}`;
+          } else {
+            progressText = `Phase: ${prog?.phase ?? 'running'}...`;
+          }
         }
+      });
 
-        const done = !!prog?.done || prog?.status === 'complete' || prog?.phase === 'complete';
-        if (done) break;
-
-        await new Promise((r) => setTimeout(r, 150));
-      }
+      myJobId = run.jobId;
+      activeJobId = run.jobId;
 
       progressText = 'Fetching report output...';
       const summary = await fetchNewParticipantsSummary(myJobId, signal);
-      const participants = await fetchAllParticipants(myJobId, 1000, signal);
+      const participants = await fetchAllNewParticipantsRows<ParticipantRow>({
+        jobId: myJobId,
+        limit: 1000,
+        signal,
+        onPage: ({ loaded, total }) => {
+          progressText = `Loaded participants: ${loaded}${total ? ` / ${total}` : ''}`;
+        }
+      });
 
       const data: NewParticipantsReport = {
         generatedAt: String(summary.generatedAt),
