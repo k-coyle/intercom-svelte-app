@@ -4,10 +4,9 @@
   import { browser } from '$app/environment';
   import {
     beaconCleanupCaseloadJob,
+    fetchAllCaseloadViewItems,
     cleanupCaseloadJob,
-    createCaseloadJob,
-    fetchCaseloadViewPage,
-    stepCaseloadJob
+    runCaseloadJobUntilComplete
   } from '$lib/client/caseload-job';
   import {
     MAX_LOOKBACK_DAYS,
@@ -151,30 +150,15 @@
     limit = 500,
     signal?: AbortSignal
   ): Promise<SessionDetailRow[]> {
-    let offset = 0;
-    let all: SessionDetailRow[] = [];
-
-    while (true) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-      const json = await fetchCaseloadViewPage<any>(
-        jobId,
-        'sessions',
-        offset,
-        limit,
-        signal
-      );
-      const items: SessionDetailRow[] = json.items ?? json.data ?? [];
-      all = all.concat(items);
-
-      const nextOffset = json.nextOffset;
-      progressText = `Loaded sessions: ${all.length}${json.total ? ` / ${json.total}` : ''}`;
-
-      if (nextOffset == null) break;
-      offset = Number(nextOffset);
-    }
-
-    return all;
+    return fetchAllCaseloadViewItems<SessionDetailRow>({
+      jobId,
+      view: 'sessions',
+      limit,
+      signal,
+      onPage: ({ loaded, total }) => {
+        progressText = `Loaded sessions: ${loaded}${total ? ` / ${total}` : ''}`;
+      }
+    });
   }
 
   function sessionKey(s: SessionDetailRow): string {
@@ -253,33 +237,29 @@
       activeJobId = null;
       if (prev) await cleanupCaseloadJob(prev);
 
-      myJobId = await createCaseloadJob(requested, until, signal);
-      activeJobId = myJobId;
-
-      // Poll / step until complete
-      while (true) {
-        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-        const prog = await stepCaseloadJob(myJobId, signal);
-
-        if (prog?.status === 'error') throw new Error(String(prog?.error ?? 'Job failed'));
-        if (prog?.status === 'cancelled') throw new Error('Job cancelled');
-
-        if (prog?.progress) {
-          const p = prog.progress;
-          progressText =
-            `Phase: ${prog.phase} · Pages ${p.pagesFetched ?? 0} · ` +
-            `Sessions ${p.sessionsCount ?? p.sessionsFetched ?? 0} · ` +
-            `Members ${p.uniqueMembers ?? 0}`;
-        } else {
-          progressText = `Phase: ${prog?.phase ?? 'running'}…`;
+      const run = await runCaseloadJobUntilComplete({
+        lookbackDays: requested,
+        untilLookbackDays: until,
+        signal,
+        onJobCreated: (id) => {
+          myJobId = id;
+          activeJobId = id;
+        },
+        onProgress: (prog) => {
+          if (prog?.progress) {
+            const p = prog.progress;
+            progressText =
+              `Phase: ${prog.phase} · Pages ${p.pagesFetched ?? 0} · ` +
+              `Sessions ${p.sessionsCount ?? p.sessionsFetched ?? 0} · ` +
+              `Members ${p.uniqueMembers ?? 0}`;
+          } else {
+            progressText = `Phase: ${prog?.phase ?? 'running'}…`;
+          }
         }
+      });
 
-        const done = !!prog?.done || prog?.status === 'complete' || prog?.phase === 'complete';
-        if (done) break;
-
-        await new Promise((r) => setTimeout(r, 150));
-      }
+      myJobId = run.jobId;
+      activeJobId = run.jobId;
 
       const newSessions = await fetchAllSessions(myJobId, 750, signal);
 

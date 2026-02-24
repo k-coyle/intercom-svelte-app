@@ -2,9 +2,9 @@
   import { onDestroy } from 'svelte';
   import {
     cleanupCaseloadJob,
-    createCaseloadJob,
+    fetchAllCaseloadViewItems,
     fetchCaseloadViewPage,
-    stepCaseloadJob
+    runCaseloadJobUntilComplete
   } from '$lib/client/caseload-job';
   import {
     MAX_LOOKBACK_DAYS,
@@ -317,29 +317,12 @@
     jobId: string,
     signal?: AbortSignal
   ): Promise<CaseloadMemberRow[]> {
-    const members: CaseloadMemberRow[] = [];
-    let offset = 0;
-
-    // Your typical size (<500) means this usually completes in one request.
-    const limit = 2000;
-
-    while (true) {
-      const page = await fetchCaseloadViewPage<any>(
-        jobId,
-        'members',
-        offset,
-        limit,
-        signal
-      );
-      const items = (page.items ?? []) as CaseloadMemberRow[];
-      members.push(...items);
-
-      if (page.nextOffset == null) break;
-      offset = Number(page.nextOffset);
-      if (!Number.isFinite(offset)) break;
-    }
-
-    return members;
+    return fetchAllCaseloadViewItems<CaseloadMemberRow>({
+      jobId,
+      view: 'members',
+      limit: 2000,
+      signal
+    });
   }
 
   async function runJobAndBuildReport(
@@ -360,32 +343,26 @@
     let myJobId: string | null = null;
 
     try {
-      myJobId = await createCaseloadJob(lookbackDays, untilLookbackDays, signal);
-      activeJobId = myJobId;
-
-      let done = false;
-
-      while (!done) {
-        const prog = await stepCaseloadJob(myJobId, signal);
-
-        if (prog?.status === 'error') {
-          throw new Error(`Caseload job failed: ${prog?.error ?? 'Unknown error'}`);
+      const run = await runCaseloadJobUntilComplete({
+        lookbackDays,
+        untilLookbackDays,
+        signal,
+        onJobCreated: (id) => {
+          myJobId = id;
+          activeJobId = id;
+        },
+        onProgress: (prog) => {
+          if (prog?.progress) {
+            const p = prog.progress;
+            progressText =
+              `Pages ${p.pagesFetched ?? 0} · conv ${p.conversationsFetched ?? 0} · ` +
+              `members ${p.uniqueMembers ?? 0} · missing contacts ${p.missingContacts ?? 0}`;
+          }
         }
-        if (prog?.status === 'cancelled') {
-          throw new Error('Caseload job was cancelled.');
-        }
+      });
 
-        done = !!prog.done;
-
-        if (prog?.progress) {
-          const p = prog.progress;
-          progressText =
-            `Pages ${p.pagesFetched ?? 0} · conv ${p.conversationsFetched ?? 0} · ` +
-            `members ${p.uniqueMembers ?? 0} · missing contacts ${p.missingContacts ?? 0}`;
-        }
-
-        if (!done) await new Promise((r) => setTimeout(r, 150));
-      }
+      myJobId = run.jobId;
+      activeJobId = run.jobId;
 
       const summaryPayload = await fetchCaseloadViewPage<any>(myJobId, 'summary');
       const members = await fetchAllMembers(myJobId, signal);
