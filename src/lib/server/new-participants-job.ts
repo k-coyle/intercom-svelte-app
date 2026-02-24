@@ -652,3 +652,42 @@ export function getNewParticipantsJobParticipants(jobId: string, offset: number,
 		total: job.report.participants.length
 	};
 }
+
+export async function runNewParticipantsJobToCompletion(
+	lookbackDaysRaw: unknown,
+	opts: { maxSteps?: number; stepDelayMs?: number } = {}
+): Promise<NewParticipantsReport> {
+	const created = createNewParticipantsJob(lookbackDaysRaw);
+	const jobId = created.jobId;
+	const maxSteps = Math.max(1, Math.floor(opts.maxSteps ?? 500));
+	const stepDelayMs = Math.max(0, Math.floor(opts.stepDelayMs ?? 0));
+
+	try {
+		for (let i = 0; i < maxSteps; i += 1) {
+			const status = await stepNewParticipantsJob(jobId);
+			if (!status) throw new Error(`Job not found: ${jobId}`);
+
+			if (status.status === 'error') {
+				throw new Error(String(status.error ?? 'new-participants job failed'));
+			}
+
+			if (status.status === 'cancelled') {
+				throw new Error('new-participants job cancelled');
+			}
+
+			if (status.done || status.status === 'complete' || status.phase === 'complete') {
+				const report = getNewParticipantsJobReport(jobId);
+				if (!report) throw new Error('new-participants job completed without report payload');
+				return report;
+			}
+
+			if (stepDelayMs > 0) {
+				await new Promise((resolve) => setTimeout(resolve, stepDelayMs));
+			}
+		}
+
+		throw new Error(`new-participants job exceeded max steps (${maxSteps})`);
+	} finally {
+		cleanupNewParticipantsJob(jobId);
+	}
+}
