@@ -16,10 +16,9 @@ import {
 	computeElapsedEndUnixForMonth,
 	computeMonthComparisonWindow
 } from '$lib/server/report-time';
+import { isQualifyingCoachingSession } from '$lib/server/engagement-rules';
 
 const SPARKLINE_POINTS = 8;
-const SESSION_CHANNELS = ['Phone', 'Video Conference'];
-const QUALIFYING_SERVICE_CODES = ['Health Coaching 001', 'Disease Management 002'];
 
 type KpiValue = {
 	count: number;
@@ -112,25 +111,12 @@ function buildQualifyingSessionsQuery(startUnix: number, endUnix: number) {
 	};
 }
 
-function normalizeValue(v: any): string {
-	return String(v ?? '')
-		.trim()
-		.toLowerCase()
-		.replace(/[_-]+/g, ' ')
-		.replace(/\s+/g, ' ');
-}
-
 function isQualifyingSession(conversation: any): boolean {
 	const attrs = conversation?.custom_attributes ?? {};
-	const channel = normalizeValue(attrs[INTERCOM_ATTR_CHANNEL]);
-	const serviceCode = normalizeValue(attrs[INTERCOM_ATTR_SERVICE_CODE]);
-
-	const channelOk = SESSION_CHANNELS.some((item) => normalizeValue(item) === channel);
-	const serviceCodeOk = QUALIFYING_SERVICE_CODES.some(
-		(item) => normalizeValue(item) === serviceCode
+	return isQualifyingCoachingSession(
+		attrs[INTERCOM_ATTR_CHANNEL],
+		attrs[INTERCOM_ATTR_SERVICE_CODE]
 	);
-
-	return channelOk && serviceCodeOk;
 }
 
 async function fetchQualifyingSessionTimestamps(

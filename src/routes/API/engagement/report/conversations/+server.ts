@@ -17,6 +17,7 @@ import {
   INTERCOM_ATTR_NAME,
   INTERCOM_ATTR_SERVICE_CODE
 } from '$lib/server/intercom-attrs';
+import { isQualifyingCoachingSession } from '$lib/server/engagement-rules';
 
 type ReturnMode = 'file' | 'stream' | 'json';
 
@@ -188,16 +189,6 @@ function getInitiatorType(entries: AuthorEntry[]): string {
   return normalizeVal(first.authorType);
 }
 
-function isQualifiedCoachingSession(channel: any, serviceCode: any): boolean {
-  const ch = normalizeVal(channel);
-  const sc = normalizeVal(serviceCode);
-
-  const channelOk = ch === 'phone' || ch === 'video conference';
-  const serviceOk = sc === 'health coaching 001' || sc === 'disease management 002';
-
-  return channelOk && serviceOk;
-}
-
 function computeCommunicationFlag(
   entries: AuthorEntry[],
   channel: any,
@@ -211,7 +202,7 @@ function computeCommunicationFlag(
   if (initiator === 'contact' && !hasAdmin) return 'Unanswered';
 
   // B) Bidirectional: true back-and-forth OR qualifies as coaching session
-  if ((hasContact && hasAdmin) || isQualifiedCoachingSession(channel, serviceCode)) {
+  if ((hasContact && hasAdmin) || isQualifyingCoachingSession(channel, serviceCode)) {
     return 'Bidirectional';
   }
 
