@@ -1,9 +1,15 @@
 <!-- src/routes/engagement/new-participants/+page.svelte -->
 <script lang="ts">
+  import { onDestroy } from 'svelte';
+  import {
+    createNewParticipantsJob,
+    fetchNewParticipantsView,
+    cleanupNewParticipantsJob,
+    stepNewParticipantsJob
+  } from '$lib/client/new-participants-job';
   import {
     MAX_LOOKBACK_DAYS,
     downloadCsv,
-    fetchJson,
     formatUnixDate,
     parseLookbackDays
   } from '$lib/client/report-utils';
@@ -67,6 +73,9 @@
   // UI / control state
   let loading = false;
   let error: string | null = null;
+  let progressText: string | null = null;
+  let activeJobId: string | null = null;
+  let runController: AbortController | null = null;
 
   let selectedLookbackDays: string = ''; // user enters before first load
   let selectedCoachId = '';
@@ -230,9 +239,49 @@
     applyFilters();
   }
 
+  async function fetchNewParticipantsSummary(jobId: string, signal?: AbortSignal): Promise<any> {
+    return fetchNewParticipantsView<any>(jobId, 'summary', undefined, undefined, signal);
+  }
+
+  async function fetchAllParticipants(
+    jobId: string,
+    limit = 1000,
+    signal?: AbortSignal
+  ): Promise<ParticipantRow[]> {
+    let offset = 0;
+    const all: ParticipantRow[] = [];
+
+    while (true) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+      const page = await fetchNewParticipantsView<any>(
+        jobId,
+        'participants',
+        offset,
+        limit,
+        signal
+      );
+
+      const items = (page.items ?? []) as ParticipantRow[];
+      all.push(...items);
+
+      progressText = `Loaded participants: ${all.length}${page.total ? ` / ${page.total}` : ''}`;
+
+      if (page.nextOffset == null) break;
+      offset = Number(page.nextOffset);
+      if (!Number.isFinite(offset)) break;
+    }
+
+    return all;
+  }
+
   async function loadReport() {
     loading = true;
     error = null;
+    progressText = null;
+
+    let myJobId: string | null = null;
+    let signal: AbortSignal | undefined;
 
     try {
       const requested = parseLookbackDays(selectedLookbackDays);
@@ -261,11 +310,60 @@
         return;
       }
 
-      const data = await fetchJson<NewParticipantsReport>('/API/engagement/new-participants', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lookbackDays: requested })
-      });
+      // Cancel any previous run in this tab
+      if (runController) {
+        runController.abort();
+        runController = null;
+      }
+      runController = new AbortController();
+      signal = runController.signal;
+
+      // Cleanup previous job if still tracked
+      const prev = activeJobId;
+      activeJobId = null;
+      if (prev) await cleanupNewParticipantsJob(prev);
+
+      progressText = 'Starting report job...';
+      myJobId = await createNewParticipantsJob(requested, signal);
+      activeJobId = myJobId;
+
+      while (true) {
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+        const prog = await stepNewParticipantsJob(myJobId, signal);
+        if (prog?.status === 'error') throw new Error(String(prog?.error ?? 'Report job failed'));
+        if (prog?.status === 'cancelled') throw new Error('Report job cancelled');
+
+        if (prog?.progress) {
+          const p = prog.progress;
+          progressText =
+            `Phase: ${prog.phase} · participants pages ${p.participantPagesFetched ?? 0} · ` +
+            `conversation pages ${p.conversationPagesFetched ?? 0}`;
+        } else {
+          progressText = `Phase: ${prog?.phase ?? 'running'}...`;
+        }
+
+        const done = !!prog?.done || prog?.status === 'complete' || prog?.phase === 'complete';
+        if (done) break;
+
+        await new Promise((r) => setTimeout(r, 150));
+      }
+
+      progressText = 'Fetching report output...';
+      const summary = await fetchNewParticipantsSummary(myJobId, signal);
+      const participants = await fetchAllParticipants(myJobId, 1000, signal);
+
+      const data: NewParticipantsReport = {
+        generatedAt: String(summary.generatedAt),
+        lookbackDays: Number(summary.lookbackDays ?? requested),
+        totalParticipants: Number(summary.totalParticipants ?? participants.length),
+        summary: {
+          gt_14_to_21: Number(summary.summary?.gt_14_to_21 ?? 0),
+          gt_21_to_28: Number(summary.summary?.gt_21_to_28 ?? 0),
+          gt_28: Number(summary.summary?.gt_28 ?? 0)
+        },
+        participants
+      };
       report = data;
       cachedReport = data;
       lastLoadedLookbackDays = requested;
@@ -287,13 +385,23 @@
       }
 
       applyFilters();
+      progressText = 'Done.';
     } catch (e: any) {
+      if (e?.name === 'AbortError') return;
       console.error(e);
       error = e?.message ?? String(e);
     } finally {
       loading = false;
+      if (myJobId) await cleanupNewParticipantsJob(myJobId);
+      if (activeJobId === myJobId) activeJobId = null;
+      if (runController?.signal === signal) runController = null;
     }
   }
+
+  onDestroy(() => {
+    if (runController) runController.abort();
+    if (activeJobId) cleanupNewParticipantsJob(activeJobId, true);
+  });
   // Sort filtered participants by daysWithoutSession
   $: if (filteredParticipants) {
   // Copy first to avoid mutating filteredParticipants in place
@@ -472,6 +580,9 @@
 
   {#if error}
     <div class="error">Error: {error}</div>
+  {/if}
+  {#if loading && progressText}
+    <div class="muted">{progressText}</div>
   {/if}
 
   <div class="filters">
