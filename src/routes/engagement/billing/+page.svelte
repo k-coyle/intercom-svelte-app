@@ -1,12 +1,15 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import {
+    cleanupBillingJob,
+    createBillingJob,
+    fetchBillingView,
+    stepBillingJob
+  } from '$lib/client/billing-job';
+  import {
     downloadCsv,
-    fetchJson,
     formatUnixDate
   } from '$lib/client/report-utils';
-
-  const BILLING_ENDPOINT = '/API/engagement/billing';
 
   interface BillingRow {
     memberId: string;
@@ -28,12 +31,6 @@
     generatedAt: string;
     totalRows: number;
     rows: BillingRow[];
-  }
-
-  interface BillingJobCreateResponse {
-    jobId: string;
-    status?: string;
-    phase?: string;
   }
 
   let report: BillingReport | null = null;
@@ -93,47 +90,8 @@
     uniqueEmployers = Array.from(set).sort();
   }
 
-  async function createBillingJob(
-    monthYearLabel: string,
-    signal?: AbortSignal
-  ): Promise<string> {
-    const data = await fetchJson<BillingJobCreateResponse>(BILLING_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op: 'create', monthYearLabel }),
-      signal
-    });
-
-    const jobId = String(data?.jobId ?? '');
-    if (!jobId) throw new Error('Create billing job failed: missing jobId');
-    return jobId;
-  }
-
-  async function stepBillingJob(jobId: string, signal?: AbortSignal): Promise<any> {
-    return fetchJson<any>(BILLING_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op: 'step', jobId }),
-      signal
-    });
-  }
-
-  async function cleanupBillingJob(jobId: string, keepalive = false): Promise<void> {
-    try {
-      await fetchJson(BILLING_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ op: 'cleanup', jobId }),
-        keepalive
-      });
-    } catch {
-      // best effort
-    }
-  }
-
   async function fetchBillingSummary(jobId: string, signal?: AbortSignal): Promise<any> {
-    const params = new URLSearchParams({ jobId, view: 'summary' });
-    return fetchJson<any>(`${BILLING_ENDPOINT}?${params.toString()}`, { signal });
+    return fetchBillingView<any>(jobId, 'summary', undefined, undefined, signal);
   }
 
   async function fetchAllBillingRows(
@@ -147,14 +105,7 @@
     while (true) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-      const params = new URLSearchParams({
-        jobId,
-        view: 'rows',
-        offset: String(offset),
-        limit: String(limit)
-      });
-
-      const json = await fetchJson<any>(`${BILLING_ENDPOINT}?${params.toString()}`, { signal });
+      const json = await fetchBillingView<any>(jobId, 'rows', offset, limit, signal);
       const items = (json.items ?? []) as BillingRow[];
       all.push(...items);
 
