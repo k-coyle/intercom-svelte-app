@@ -11,6 +11,7 @@
 		fetchNewParticipantsView,
 		runNewParticipantsJobUntilComplete
 	} from '$lib/client/new-participants-job';
+	import { buildShareKpi, formatIsoDate, formatUnixDate } from '$lib/client/report-page-utils';
 	import { MAX_LOOKBACK_DAYS, parseLookbackDays } from '$lib/client/report-utils';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
@@ -71,32 +72,6 @@
 	let activeJobId = '';
 	let controller: AbortController | null = null;
 
-	function formatUnixDate(unix: number | null): string {
-		if (unix == null) return '-';
-		const d = new Date(unix * 1000);
-		if (Number.isNaN(d.getTime())) return '-';
-		return d.toLocaleDateString();
-	}
-
-	function formatIsoDate(iso?: string): string {
-		if (!iso) return '-';
-		const d = new Date(iso);
-		if (Number.isNaN(d.getTime())) return '-';
-		return d.toLocaleString();
-	}
-
-	function buildKpi(label: string, count: number, total: number): KpiItem {
-		const share = total > 0 ? `${((count / total) * 100).toFixed(1)}%` : '0.0%';
-		return {
-			label,
-			value: count,
-			deltaLabel: 'Share',
-			deltaPct: share,
-			trend: 'flat',
-			points: [count, count, count]
-		};
-	}
-
 	function mapTopKpis(rows: NewParticipantsRow[]): KpiItem[] {
 		const total = rows.length;
 		const gt_14_to_21 = rows.filter((row) => row.buckets?.gt_14_to_21).length;
@@ -104,9 +79,9 @@
 		const gt_28 = rows.filter((row) => row.buckets?.gt_28).length;
 
 		return [
-			buildKpi('15-21 days without session', gt_14_to_21, total),
-			buildKpi('22-28 days without session', gt_21_to_28, total),
-			buildKpi('> 28 days without session', gt_28, total)
+			buildShareKpi('15-21 days without session', gt_14_to_21, total),
+			buildShareKpi('22-28 days without session', gt_21_to_28, total),
+			buildShareKpi('> 28 days without session', gt_28, total)
 		];
 	}
 

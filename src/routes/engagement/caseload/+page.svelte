@@ -12,6 +12,7 @@
 		fetchCaseloadViewPage,
 		runCaseloadJobUntilComplete
 	} from '$lib/client/caseload-job';
+	import { buildShareKpi, formatIsoDate, formatUnixDate } from '$lib/client/report-page-utils';
 	import { MAX_LOOKBACK_DAYS, parseLookbackDays } from '$lib/client/report-utils';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
@@ -89,19 +90,6 @@
 	let activeJobId = '';
 	let controller: AbortController | null = null;
 
-	function formatUnixDate(unix: number): string {
-		const d = new Date(unix * 1000);
-		if (Number.isNaN(d.getTime())) return '-';
-		return d.toLocaleDateString();
-	}
-
-	function formatIsoDate(iso?: string): string {
-		if (!iso) return '-';
-		const d = new Date(iso);
-		if (Number.isNaN(d.getTime())) return '-';
-		return d.toLocaleString();
-	}
-
 	function getBucketLabel(buckets: CaseloadMemberBuckets): string {
 		if (buckets.bucket_1) return '<= 7d';
 		if (buckets.bucket_2) return '8-28d';
@@ -128,24 +116,6 @@
 		];
 	}
 
-	function buildKpi(
-		label: string,
-		value: number,
-		total: number,
-		points: number[]
-	): KpiItem {
-		const safeTotal = total > 0 ? total : 0;
-		const share = safeTotal > 0 ? `${((value / safeTotal) * 100).toFixed(1)}%` : '0.0%';
-		return {
-			label,
-			value,
-			deltaLabel: 'Share',
-			deltaPct: share,
-			trend: 'flat',
-			points
-		};
-	}
-
 	function mapTopKpis(filteredMembers: CaseloadMemberRow[]): KpiItem[] {
 		const bucket1 = filteredMembers.filter((m) => m.buckets.bucket_1).length;
 		const bucket2 = filteredMembers.filter((m) => m.buckets.bucket_2).length;
@@ -153,9 +123,9 @@
 		const total = filteredMembers.length;
 
 		return [
-			buildKpi('Active in <= 7 days', bucket1, total, [bucket1, bucket1, bucket1]),
-			buildKpi('8-28 days since session', bucket2, total, [bucket2, bucket2, bucket2]),
-			buildKpi('> 56 days since session', bucket4, total, [bucket4, bucket4, bucket4])
+			buildShareKpi('Active in <= 7 days', bucket1, total, [bucket1, bucket1, bucket1]),
+			buildShareKpi('8-28 days since session', bucket2, total, [bucket2, bucket2, bucket2]),
+			buildShareKpi('> 56 days since session', bucket4, total, [bucket4, bucket4, bucket4])
 		];
 	}
 

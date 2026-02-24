@@ -11,6 +11,7 @@
 		fetchAllCaseloadViewItems,
 		runCaseloadJobUntilComplete
 	} from '$lib/client/caseload-job';
+	import { formatUnixDate } from '$lib/client/report-page-utils';
 	import { MAX_LOOKBACK_DAYS, parseLookbackDays } from '$lib/client/report-utils';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
@@ -60,12 +61,6 @@
 
 	let activeJobId = '';
 	let controller: AbortController | null = null;
-
-	function formatUnixDate(unix: number): string {
-		const d = new Date(unix * 1000);
-		if (Number.isNaN(d.getTime())) return '-';
-		return d.toLocaleString();
-	}
 
 	function buildSparkline(values: number[]): number[] {
 		if (!values.length) return [0, 0, 0];
@@ -159,7 +154,7 @@
 					: (Math.floor(Date.now() / 1000) - s.time) / SECONDS_PER_DAY;
 
 			return {
-				time: formatUnixDate(s.time),
+				time: formatUnixDate(s.time, true),
 				member: s.memberName ?? s.memberEmail ?? s.memberId,
 				coach: s.coachName ?? s.coachId ?? '-',
 				client: s.client ?? '-',

@@ -11,6 +11,7 @@
 		fetchBillingView,
 		runBillingJobUntilComplete
 	} from '$lib/client/billing-job';
+	import { buildShareKpi, formatIsoDate, formatUnixDate } from '$lib/client/report-page-utils';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
 	const TABLE_LIMIT = 50;
@@ -75,32 +76,6 @@
 		return value.trim() || null;
 	}
 
-	function formatIsoDate(iso?: string): string {
-		if (!iso) return '-';
-		const d = new Date(iso);
-		if (Number.isNaN(d.getTime())) return '-';
-		return d.toLocaleString();
-	}
-
-	function formatUnixDate(unix: number | null): string {
-		if (unix == null) return '-';
-		const d = new Date(unix * 1000);
-		if (Number.isNaN(d.getTime())) return '-';
-		return d.toLocaleDateString();
-	}
-
-	function buildKpi(label: string, count: number, total: number): KpiItem {
-		const share = total > 0 ? `${((count / total) * 100).toFixed(1)}%` : '0.0%';
-		return {
-			label,
-			value: count,
-			deltaLabel: 'Share',
-			deltaPct: share,
-			trend: 'flat',
-			points: [count, count, count]
-		};
-	}
-
 	function buildFilterOptions(): void {
 		const employers = new Set<string>();
 		for (const row of loadedRows) {
@@ -120,9 +95,9 @@
 		const engaged = rows.filter((row) => row.engagedDuringMonth).length;
 
 		return [
-			buildKpi('Total billable users', total, total),
-			buildKpi('New participants in month', newParticipants, total),
-			buildKpi('Engaged during month', engaged, total)
+			buildShareKpi('Total billable users', total, total),
+			buildShareKpi('New participants in month', newParticipants, total),
+			buildShareKpi('Engaged during month', engaged, total)
 		];
 	}
 
