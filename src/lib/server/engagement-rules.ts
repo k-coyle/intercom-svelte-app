@@ -3,6 +3,12 @@ export const QUALIFYING_COACHING_SERVICE_CODES = [
 	'Health Coaching 001',
 	'Disease Management 002'
 ] as const;
+export const STANDARD_REPORT_SESSION_CHANNELS = [
+	'Phone',
+	'Video Conference',
+	'Email',
+	'Chat'
+] as const;
 
 function normalizeValue(v: any): string {
 	return String(v ?? '')

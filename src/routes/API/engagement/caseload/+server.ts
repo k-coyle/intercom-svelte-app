@@ -5,6 +5,7 @@ import {
   INTERCOM_ATTR_CHANNEL,
   INTERCOM_ATTR_EMPLOYER
 } from '$lib/server/intercom-attrs';
+import { STANDARD_REPORT_SESSION_CHANNELS } from '$lib/server/engagement-rules';
 import {
   isAbortError,
   JOB_TTL_MS,
@@ -38,7 +39,7 @@ const CONTACT_CHUNK_SIZE = 15;
 const CHANNEL_ATTR_KEY = INTERCOM_ATTR_CHANNEL;
 
 // Channels that count as sessions
-const SESSION_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
+const SESSION_CHANNELS = STANDARD_REPORT_SESSION_CHANNELS;
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
 
 // Contact attribute key for client (adjust if needed)

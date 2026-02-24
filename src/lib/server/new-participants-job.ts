@@ -4,6 +4,7 @@ import {
 	INTERCOM_ATTR_EMPLOYER,
 	INTERCOM_ATTR_ENROLLED_DATE
 } from '$lib/server/intercom-attrs';
+import { STANDARD_REPORT_SESSION_CHANNELS } from '$lib/server/engagement-rules';
 import {
 	isAbortError,
 	JOB_TTL_MS,
@@ -25,7 +26,7 @@ const PARTICIPANT_DATE_ATTR_KEY = INTERCOM_ATTR_ENROLLED_DATE;
 const CLIENT_ATTR_KEY = INTERCOM_ATTR_EMPLOYER;
 const CHANNEL_ATTR_KEY = INTERCOM_ATTR_CHANNEL;
 
-const SESSION_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
+const SESSION_CHANNELS = STANDARD_REPORT_SESSION_CHANNELS;
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
 
 export interface ParticipantBuckets {

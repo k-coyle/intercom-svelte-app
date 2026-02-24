@@ -6,6 +6,7 @@ import {
 	INTERCOM_ATTR_EMPLOYER,
 	INTERCOM_ATTR_ENROLLED_DATE
 } from '$lib/server/intercom-attrs';
+import { QUALIFYING_COACHING_CHANNELS } from '$lib/server/engagement-rules';
 import {
 	isAbortError,
 	JOB_TTL_MS,
@@ -28,7 +29,7 @@ const ENGAGED_DAYS = 57; // "<57 days ago"
 const ENGAGED_TAIL_DAYS = ENGAGED_DAYS - 1; // 56
 
 // Channels that count as billing "qualifying sessions"
-const SESSION_CHANNELS = ['Phone', 'Video Conference'] as const;
+const SESSION_CHANNELS = QUALIFYING_COACHING_CHANNELS;
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
 
 const CONVERSATIONS_PER_PAGE = Math.min(100, INTERCOM_MAX_PER_PAGE);
