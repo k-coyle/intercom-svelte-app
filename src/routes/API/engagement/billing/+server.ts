@@ -16,6 +16,7 @@ import {
 	timeLeftMs
 } from '$lib/server/job-runtime';
 import { coerceMonthYearLabel, computeMonthWindow, REPORT_TIMEZONE } from '$lib/server/report-time';
+import { createReportLogger } from '$lib/server/report-logger';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
@@ -110,6 +111,7 @@ interface BillingJobState {
 }
 
 const jobs = new Map<string, BillingJobState>();
+const log = createReportLogger('engagement-billing');
 
 function makeJobId() {
 	return `billing-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -118,6 +120,7 @@ function makeJobId() {
 function cleanExpiredJobs(nowMs: number) {
 	for (const [id, job] of jobs.entries()) {
 		if (nowMs - job.updatedAtMs > JOB_TTL_MS) {
+			log.info('job_expired', { jobId: id, ageMs: nowMs - job.updatedAtMs });
 			jobs.delete(id);
 		}
 	}
@@ -180,6 +183,12 @@ function createJob(monthYearLabel: string): BillingJobState {
 	};
 
 	jobs.set(job.id, job);
+	log.info('job_create', {
+		jobId: job.id,
+		monthYearLabel,
+		monthStartUnix: job.monthStartUnix,
+		monthEndUnix: job.monthEndUnix
+	});
 
 	return job;
 }
@@ -335,7 +344,7 @@ async function hydrateContactsStep(job: BillingJobState, deadlineMs: number) {
 			requestOptions: { deadlineMs, maxRetries: 3 },
 			onError: (id, err) => {
 				const message = (err as any)?.message ?? String(err);
-				console.error(`Billing: error fetching contact ${id}:`, message);
+				log.warn('hydrate_contact_error', { jobId: job.id, memberId: id, message });
 			}
 		});
 
@@ -433,6 +442,11 @@ function finalizeReport(job: BillingJobState) {
 
 	job.phase = 'complete';
 	job.status = 'complete';
+	log.info('job_complete', {
+		jobId: job.id,
+		totalRows: job.report.totalRows,
+		monthYearLabel: job.monthYearLabel
+	});
 }
 
 function buildProgress(job: BillingJobState) {
@@ -459,6 +473,7 @@ async function stepJob(job: BillingJobState): Promise<any> {
 
 	job.status = 'running';
 	job.updatedAtMs = Date.now();
+	log.debug('job_step_start', { jobId: job.id, phase: job.phase });
 
 	try {
 		if (job.phase === 'conversations') {
@@ -472,6 +487,7 @@ async function stepJob(job: BillingJobState): Promise<any> {
 				job.conversationsStartingAfter = nextCursor;
 				if (!nextCursor) {
 					job.phase = 'participants';
+					log.debug('phase_advance', { jobId: job.id, to: 'participants' });
 					break;
 				}
 
@@ -499,6 +515,7 @@ async function stepJob(job: BillingJobState): Promise<any> {
 				if (!nextCursor) {
 					ensureUnionIds(job);
 					job.phase = 'hydrate';
+					log.debug('phase_advance', { jobId: job.id, to: 'hydrate', unionMembers: job.unionIds.length });
 					break;
 				}
 
@@ -517,6 +534,13 @@ async function stepJob(job: BillingJobState): Promise<any> {
 		}
 
 		job.updatedAtMs = Date.now();
+		log.debug('job_step_end', {
+			jobId: job.id,
+			phase: job.phase,
+			status: job.status,
+			conversationPagesFetched: job.conversationPagesFetched,
+			participantPagesFetched: job.participantPagesFetched
+		});
 
 		return {
 			jobId: job.id,
@@ -545,6 +569,7 @@ async function stepJob(job: BillingJobState): Promise<any> {
 		job.phase = 'complete';
 		job.error = err?.message ?? String(err);
 		job.updatedAtMs = Date.now();
+		log.error('job_error', { jobId: job.id, message: job.error, phase: job.phase });
 
 		return {
 			jobId: job.id,
@@ -644,6 +669,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 
 		const deleted = jobs.delete(jobId);
+		log.info('job_cleanup', { jobId, deleted });
 		return new Response(JSON.stringify({ jobId, deleted }), {
 			headers: { 'Content-Type': 'application/json' }
 		});
@@ -662,6 +688,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		job.status = 'cancelled';
 		job.phase = 'complete';
 		job.updatedAtMs = Date.now();
+		log.info('job_cancelled', { jobId: job.id, monthYearLabel: job.monthYearLabel });
 
 		return new Response(JSON.stringify({ jobId: job.id, status: job.status, done: true }), {
 			headers: { 'Content-Type': 'application/json' }

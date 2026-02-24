@@ -13,6 +13,7 @@ import {
 	STEP_SAFETY_MS,
 	timeLeftMs
 } from '$lib/server/job-runtime';
+import { createReportLogger } from '$lib/server/report-logger';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 const DEFAULT_LOOKBACK_DAYS = 365;
@@ -28,6 +29,7 @@ const CHANNEL_ATTR_KEY = INTERCOM_ATTR_CHANNEL;
 
 const SESSION_CHANNELS = STANDARD_REPORT_SESSION_CHANNELS;
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
+const log = createReportLogger('engagement-new-participants');
 
 export interface ParticipantBuckets {
 	gt_14_to_21: boolean;
@@ -204,6 +206,7 @@ function buildStatusPayload(job: JobState) {
 function cleanExpiredJobs(nowMs: number) {
 	for (const [id, job] of jobs.entries()) {
 		if (nowMs - job.updatedAtMs > JOB_TTL_MS) {
+			log.info('job_expired', { jobId: id, ageMs: nowMs - job.updatedAtMs });
 			jobs.delete(id);
 		}
 	}
@@ -455,6 +458,11 @@ function finalize(job: JobState) {
 
 	job.status = 'complete';
 	job.phase = 'complete';
+	log.info('job_complete', {
+		jobId: job.id,
+		lookbackDays: job.lookbackDays,
+		totalParticipants: participants.length
+	});
 }
 
 async function stepJob(job: JobState) {
@@ -463,6 +471,7 @@ async function stepJob(job: JobState) {
 
 	job.status = 'running';
 	job.updatedAtMs = Date.now();
+	log.debug('job_step_start', { jobId: job.id, phase: job.phase });
 
 	try {
 		if (job.phase === 'participants') {
@@ -476,6 +485,11 @@ async function stepJob(job: JobState) {
 				if (!nextCursor) {
 					job.participantIds = Array.from(job.participantsById.keys());
 					job.phase = 'conversations';
+					log.debug('phase_advance', {
+						jobId: job.id,
+						to: 'conversations',
+						participantsInScope: job.participantIds.length
+					});
 					break;
 				}
 
@@ -497,6 +511,7 @@ async function stepJob(job: JobState) {
 
 				if (chunkIds.length === 0) {
 					job.phase = 'admins';
+					log.debug('phase_advance', { jobId: job.id, to: 'admins' });
 					break;
 				}
 
@@ -524,6 +539,7 @@ async function stepJob(job: JobState) {
 					: Math.ceil(job.participantIds.length / CONTACT_CHUNK_SIZE);
 			if (job.phase === 'conversations' && job.conversationChunkIndex >= totalChunks) {
 				job.phase = 'admins';
+				log.debug('phase_advance', { jobId: job.id, to: 'admins' });
 			}
 		}
 
@@ -531,6 +547,7 @@ async function stepJob(job: JobState) {
 			if (timeLeftMs(deadlineMs) >= MIN_TIME_TO_START_REQUEST_MS) {
 				job.adminMap = await fetchAdminMap(deadlineMs);
 				job.phase = 'finalize';
+				log.debug('phase_advance', { jobId: job.id, to: 'finalize', admins: job.adminMap.size });
 			}
 		}
 
@@ -539,10 +556,18 @@ async function stepJob(job: JobState) {
 		}
 
 		job.updatedAtMs = Date.now();
+		log.debug('job_step_end', {
+			jobId: job.id,
+			phase: job.phase,
+			status: job.status,
+			participantsFetched: job.participantsFetched,
+			conversationsFetched: job.conversationsFetched
+		});
 		return buildStatusPayload(job);
 	} catch (err: any) {
 		if (isAbortError(err)) {
 			job.updatedAtMs = Date.now();
+			log.debug('job_step_abort', { jobId: job.id, phase: job.phase });
 			return buildStatusPayload(job);
 		}
 
@@ -550,6 +575,7 @@ async function stepJob(job: JobState) {
 		job.phase = 'complete';
 		job.error = err?.message ?? String(err);
 		job.updatedAtMs = Date.now();
+		log.error('job_error', { jobId: job.id, message: job.error });
 		return buildStatusPayload(job);
 	}
 }
@@ -584,6 +610,11 @@ export function createNewParticipantsJob(lookbackDaysRaw: unknown) {
 	};
 
 	jobs.set(job.id, job);
+	log.info('job_create', {
+		jobId: job.id,
+		lookbackDays: job.lookbackDays,
+		sinceUnix: job.sinceUnix
+	});
 	return buildStatusPayload(job);
 }
 
@@ -605,11 +636,14 @@ export function cancelNewParticipantsJob(jobId: string) {
 	job.status = 'cancelled';
 	job.phase = 'complete';
 	job.updatedAtMs = Date.now();
+	log.info('job_cancelled', { jobId });
 	return buildStatusPayload(job);
 }
 
 export function cleanupNewParticipantsJob(jobId: string) {
-	return jobs.delete(jobId);
+	const deleted = jobs.delete(jobId);
+	log.info('job_cleanup', { jobId, deleted });
+	return deleted;
 }
 
 export function getNewParticipantsJobStatus(jobId: string) {
