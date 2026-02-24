@@ -1,10 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
+	import LoadStatus from '$lib/components/report/LoadStatus.svelte';
 	import { fetchOverviewReport, type OverviewResponse } from '$lib/client/overview-report';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
 	let overview: OverviewResponse | null = null;
+	let loading = false;
+	let error: string | null = null;
+	let progressText: string | null = null;
 	let topKpisOverride: KpiItem[] | null = null;
 	let bottomLeftLinesOverride: string[] | null = null;
 	let bottomRightTableOverride: {
@@ -110,16 +114,23 @@
 	}
 
 	async function loadOverview(): Promise<void> {
+		loading = true;
+		error = null;
+		progressText = 'Loading overview KPIs...';
 		try {
 			overview = await fetchOverviewReport();
 			topKpisOverride = mapOverviewKpis(overview);
 			bottomLeftLinesOverride = mapOverviewBottomLeft(overview);
 			bottomRightTableOverride = mapOverviewTable(overview);
-		} catch {
+		} catch (e: any) {
 			// Keep mock config values if overview endpoint is unavailable.
+			error = e?.message ?? 'Unable to load overview report.';
 			topKpisOverride = null;
 			bottomLeftLinesOverride = null;
 			bottomRightTableOverride = null;
+		} finally {
+			loading = false;
+			progressText = null;
 		}
 	}
 
@@ -128,10 +139,14 @@
 	});
 </script>
 
-<ReportCanvas
-	reportKey="overview"
-	disableFallback={true}
-	{topKpisOverride}
-	{bottomLeftLinesOverride}
-	{bottomRightTableOverride}
-/>
+<div class="space-y-4">
+	<LoadStatus {loading} {error} {progressText} />
+
+	<ReportCanvas
+		reportKey="overview"
+		disableFallback={true}
+		{topKpisOverride}
+		{bottomLeftLinesOverride}
+		{bottomRightTableOverride}
+	/>
+</div>

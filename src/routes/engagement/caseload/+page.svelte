@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
+	import LoadStatus from '$lib/components/report/LoadStatus.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
@@ -83,6 +84,7 @@
 	let uniqueClients: string[] = [];
 	let loading = false;
 	let error: string | null = null;
+	let progressText: string | null = null;
 
 	let activeJobId = '';
 	let controller: AbortController | null = null;
@@ -278,6 +280,7 @@
 
 		loading = true;
 		error = null;
+		progressText = 'Starting caseload job...';
 
 		let jobIdForCleanup = '';
 		try {
@@ -290,6 +293,10 @@
 				onJobCreated: (createdJobId) => {
 					activeJobId = createdJobId;
 					jobIdForCleanup = createdJobId;
+				},
+				onProgress: (progress) => {
+					const p = progress?.progress ?? {};
+					progressText = `Phase ${progress?.phase ?? 'running'} · pages ${p.pagesFetched ?? 0} · members ${p.uniqueMembers ?? 0}`;
 				}
 			});
 			jobIdForCleanup = jobId;
@@ -306,7 +313,10 @@
 					jobId,
 					view: 'members',
 					limit: 1000,
-					signal: controller.signal
+					signal: controller.signal,
+					onPage: ({ loaded, total }) => {
+						progressText = `Loading member rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+					}
 				})
 			]);
 
@@ -323,6 +333,7 @@
 			bottomRightTableOverride = null;
 		} finally {
 			loading = false;
+			progressText = null;
 			if (jobIdForCleanup) {
 				void cleanupCaseloadJob(jobIdForCleanup);
 				if (activeJobId === jobIdForCleanup) activeJobId = '';
@@ -411,9 +422,7 @@
 				{/each}
 			</div>
 
-			{#if error}
-				<p class="text-sm text-destructive">{error}</p>
-			{/if}
+			<LoadStatus {loading} {error} {progressText} />
 		</Card.Content>
 	</Card.Root>
 
