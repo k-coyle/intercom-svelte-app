@@ -7,10 +7,12 @@
 	import {
 		engagementReportConfig,
 		type EngagementReportLayout,
+		type KpiItem,
 		type ReportKey
 	} from './engagementReportConfig';
 
 	export let reportKey: ReportKey = 'overview';
+	export let topKpisOverride: KpiItem[] | null = null;
 
 	$: config = engagementReportConfig[reportKey] as EngagementReportLayout;
 </script>
@@ -18,7 +20,7 @@
 <div class="space-y-4">
 	<PageHeader title={config.pageTitle} subtitle={config.pageSubtitle} />
 
-	<KpiRow items={config.topKpis} />
+	<KpiRow items={topKpisOverride ?? config.topKpis} />
 
 	<div class="grid gap-4 lg:grid-cols-2">
 		<PanelCard title={config.midLeftPanel.title}>
