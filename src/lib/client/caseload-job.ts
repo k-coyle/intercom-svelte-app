@@ -3,12 +3,6 @@ import { createJob, fetchJobView, cleanupJob, stepJob } from '$lib/client/job-ap
 
 const CASELOAD_ENDPOINT = '/API/engagement/caseload';
 
-export type CaseloadCreateResponse = {
-  jobId: string;
-  status?: string;
-  phase?: string;
-};
-
 export async function createCaseloadJob(
   lookbackDays: number,
   untilLookbackDays?: number | null,

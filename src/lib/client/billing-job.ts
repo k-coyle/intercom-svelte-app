@@ -3,13 +3,6 @@ import { cancelJob, cleanupJob, createJob, fetchJobView, stepJob } from '$lib/cl
 
 const BILLING_ENDPOINT = '/API/engagement/billing';
 
-export type BillingCreateResponse = {
-	jobId: string;
-	status?: string;
-	phase?: string;
-	monthYearLabel?: string;
-};
-
 export async function createBillingJob(
 	monthYearLabel?: string,
 	signal?: AbortSignal

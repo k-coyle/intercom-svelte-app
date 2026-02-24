@@ -3,12 +3,6 @@ import { cancelJob, cleanupJob, createJob, fetchJobView, stepJob } from '$lib/cl
 
 const NEW_PARTICIPANTS_ENDPOINT = '/API/engagement/new-participants';
 
-export type NewParticipantsCreateResponse = {
-	jobId: string;
-	status?: string;
-	phase?: string;
-};
-
 export async function createNewParticipantsJob(
 	lookbackDays?: number,
 	signal?: AbortSignal
