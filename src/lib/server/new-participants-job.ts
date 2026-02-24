@@ -4,15 +4,18 @@ import {
 	INTERCOM_ATTR_EMPLOYER,
 	INTERCOM_ATTR_ENROLLED_DATE
 } from '$lib/server/intercom-attrs';
+import {
+	isAbortError,
+	JOB_TTL_MS,
+	MIN_TIME_TO_START_REQUEST_MS,
+	STEP_BUDGET_MS,
+	STEP_SAFETY_MS,
+	timeLeftMs
+} from '$lib/server/job-runtime';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 const DEFAULT_LOOKBACK_DAYS = 365;
 const MAX_LOOKBACK_DAYS = 365;
-
-const STEP_BUDGET_MS = 20_000;
-const STEP_SAFETY_MS = 1_250;
-const MIN_TIME_TO_START_REQUEST_MS = 4_500;
-const JOB_TTL_MS = 10 * 60 * 1000;
 
 const PARTICIPANTS_PER_PAGE = INTERCOM_MAX_PER_PAGE;
 const CONVERSATIONS_PER_PAGE = Math.min(100, INTERCOM_MAX_PER_PAGE);
@@ -118,19 +121,6 @@ function parseLookbackDays(raw: unknown): number {
 
 function makeJobId() {
 	return `new-participants-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function timeLeftMs(deadlineMs: number) {
-	return deadlineMs - Date.now();
-}
-
-function isAbortError(e: any) {
-	return (
-		e?.name === 'AbortError' ||
-		String(e?.message ?? '')
-			.toLowerCase()
-			.includes('aborted')
-	);
 }
 
 function normalizeValue(v: any): string {

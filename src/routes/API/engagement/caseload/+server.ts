@@ -5,6 +5,14 @@ import {
   INTERCOM_ATTR_CHANNEL,
   INTERCOM_ATTR_EMPLOYER
 } from '$lib/server/intercom-attrs';
+import {
+  isAbortError,
+  JOB_TTL_MS,
+  MIN_TIME_TO_START_REQUEST_MS,
+  STEP_BUDGET_MS,
+  STEP_SAFETY_MS,
+  timeLeftMs
+} from '$lib/server/job-runtime';
 import { randomUUID, createHash } from 'crypto';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
@@ -12,14 +20,10 @@ const MAX_RETRIES = 3;
 const CONVERSATIONS_PER_PAGE = 100;
 
 // ---- Strict per-request step budget ----
-const STEP_BUDGET_MS = 20_000;
-const STEP_SAFETY_MS = 1_250;
 
 // Don’t start a new Intercom request if there’s less than this much time left in the step
-const MIN_TIME_TO_START_REQUEST_MS = 4_500;
 
 // ---- TTLs (in-memory, per job/session) ----
-const JOB_TTL_MS = 10 * 60 * 1000;
 const ADMIN_CACHE_TTL_MS = 10 * 60 * 1000;
 const CONTACT_CACHE_TTL_MS = 60 * 60 * 1000;
 
@@ -257,15 +261,6 @@ function setNotFoundContact(job: CaseloadJobState, id: string) {
       _notFound: true
     }
   });
-}
-
-function timeLeftMs(deadlineMs: number) {
-  return deadlineMs - Date.now();
-}
-
-function isAbortError(e: any) {
-  // Node fetch + AbortController typically throws DOMException with name 'AbortError'
-  return e?.name === 'AbortError' || String(e?.message ?? '').toLowerCase().includes('aborted');
 }
 
 // ---------- Intercom request ----------

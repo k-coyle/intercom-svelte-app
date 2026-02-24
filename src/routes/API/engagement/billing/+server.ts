@@ -6,6 +6,14 @@ import {
 	INTERCOM_ATTR_EMPLOYER,
 	INTERCOM_ATTR_ENROLLED_DATE
 } from '$lib/server/intercom-attrs';
+import {
+	isAbortError,
+	JOB_TTL_MS,
+	MIN_TIME_TO_START_REQUEST_MS,
+	STEP_BUDGET_MS,
+	STEP_SAFETY_MS,
+	timeLeftMs
+} from '$lib/server/job-runtime';
 import { coerceMonthYearLabel } from '$lib/server/report-time';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
@@ -23,12 +31,6 @@ const REPORT_TZ = 'America/New_York';
 // Channels that count as billing "qualifying sessions"
 const SESSION_CHANNELS = ['Phone', 'Video Conference'] as const;
 type SessionChannel = (typeof SESSION_CHANNELS)[number];
-
-// Job/runtime controls
-const STEP_BUDGET_MS = 20_000;
-const STEP_SAFETY_MS = 1_250;
-const MIN_TIME_TO_START_REQUEST_MS = 4_500;
-const JOB_TTL_MS = 10 * 60 * 1000;
 
 const CONVERSATIONS_PER_PAGE = Math.min(100, INTERCOM_MAX_PER_PAGE);
 const CONTACTS_PER_PAGE = INTERCOM_MAX_PER_PAGE;
@@ -113,10 +115,6 @@ function makeJobId() {
 	return `billing-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function timeLeftMs(deadlineMs: number) {
-	return deadlineMs - Date.now();
-}
-
 function cleanExpiredJobs(nowMs: number) {
 	for (const [id, job] of jobs.entries()) {
 		if (nowMs - job.updatedAtMs > JOB_TTL_MS) {
@@ -125,14 +123,6 @@ function cleanExpiredJobs(nowMs: number) {
 	}
 }
 
-function isAbortError(e: any) {
-	return (
-		e?.name === 'AbortError' ||
-		String(e?.message ?? '')
-			.toLowerCase()
-			.includes('aborted')
-	);
-}
 
 async function intercomRequestWithDeadline(
 	path: string,
