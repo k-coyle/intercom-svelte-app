@@ -8,13 +8,28 @@
 		engagementReportConfig,
 		type EngagementReportLayout,
 		type KpiItem,
+		type TableColumn,
 		type ReportKey
 	} from './engagementReportConfig';
 
 	export let reportKey: ReportKey = 'overview';
 	export let topKpisOverride: KpiItem[] | null = null;
+	export let bottomLeftLinesOverride: string[] | null = null;
+	export let bottomRightTableOverride: {
+		title?: string;
+		columns?: TableColumn[];
+		rows?: Record<string, any>[];
+		footerText?: string;
+	} | null = null;
 
 	$: config = engagementReportConfig[reportKey] as EngagementReportLayout;
+	$: bottomLeftLines = bottomLeftLinesOverride ?? config.bottomLeftPanel.lines;
+	$: tableConfig = {
+		title: bottomRightTableOverride?.title ?? config.bottomRightTable.title,
+		columns: bottomRightTableOverride?.columns ?? config.bottomRightTable.columns,
+		rows: bottomRightTableOverride?.rows ?? config.bottomRightTable.rows,
+		footerText: bottomRightTableOverride?.footerText ?? config.bottomRightTable.footerText
+	};
 </script>
 
 <div class="space-y-4">
@@ -57,17 +72,17 @@
 	<div class="grid gap-4 lg:grid-cols-2">
 		<PanelCard title={config.bottomLeftPanel.title}>
 			<ul class="space-y-2 text-sm text-muted-foreground">
-				{#each config.bottomLeftPanel.lines as line}
+				{#each bottomLeftLines as line}
 					<li>{line}</li>
 				{/each}
 			</ul>
 		</PanelCard>
 
 		<TablePanel
-			title={config.bottomRightTable.title}
-			columns={config.bottomRightTable.columns}
-			rows={config.bottomRightTable.rows}
-			footerText={config.bottomRightTable.footerText ?? 'Showing 1-50 of 120 entries'}
+			title={tableConfig.title}
+			columns={tableConfig.columns}
+			rows={tableConfig.rows}
+			footerText={tableConfig.footerText ?? 'Showing 1-50 of 120 entries'}
 		/>
 	</div>
 </div>
