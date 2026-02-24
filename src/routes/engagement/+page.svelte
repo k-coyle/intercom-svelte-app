@@ -130,6 +130,7 @@
 
 <ReportCanvas
 	reportKey="overview"
+	disableFallback={true}
 	{topKpisOverride}
 	{bottomLeftLinesOverride}
 	{bottomRightTableOverride}

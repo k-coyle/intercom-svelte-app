@@ -231,6 +231,7 @@
 
 <ReportCanvas
 	reportKey="caseload"
+	disableFallback={true}
 	{topKpisOverride}
 	{bottomLeftLinesOverride}
 	{bottomRightTableOverride}

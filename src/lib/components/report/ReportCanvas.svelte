@@ -13,6 +13,7 @@
 	} from './engagementReportConfig';
 
 	export let reportKey: ReportKey = 'overview';
+	export let disableFallback: boolean = false;
 	export let topKpisOverride: KpiItem[] | null = null;
 	export let bottomLeftLinesOverride: string[] | null = null;
 	export let bottomRightTableOverride: {
@@ -23,19 +24,30 @@
 	} | null = null;
 
 	$: config = engagementReportConfig[reportKey] as EngagementReportLayout;
-	$: bottomLeftLines = bottomLeftLinesOverride ?? config.bottomLeftPanel.lines;
+	$: blankKpis = config.topKpis.map((kpi) => ({
+		label: kpi.label,
+		value: '--',
+		deltaLabel: '--',
+		deltaPct: '--',
+		trend: 'flat' as const,
+		points: []
+	}));
+	$: effectiveTopKpis = topKpisOverride ?? (disableFallback ? blankKpis : config.topKpis);
+	$: bottomLeftLines = bottomLeftLinesOverride ?? (disableFallback ? [] : config.bottomLeftPanel.lines);
 	$: tableConfig = {
 		title: bottomRightTableOverride?.title ?? config.bottomRightTable.title,
 		columns: bottomRightTableOverride?.columns ?? config.bottomRightTable.columns,
-		rows: bottomRightTableOverride?.rows ?? config.bottomRightTable.rows,
-		footerText: bottomRightTableOverride?.footerText ?? config.bottomRightTable.footerText
+		rows: bottomRightTableOverride?.rows ?? (disableFallback ? [] : config.bottomRightTable.rows),
+		footerText:
+			bottomRightTableOverride?.footerText ??
+			(disableFallback ? 'No data loaded.' : config.bottomRightTable.footerText)
 	};
 </script>
 
 <div class="space-y-4">
 	<PageHeader title={config.pageTitle} subtitle={config.pageSubtitle} />
 
-	<KpiRow items={topKpisOverride ?? config.topKpis} />
+	<KpiRow items={effectiveTopKpis} />
 
 	<div class="grid gap-4 lg:grid-cols-2">
 		<PanelCard title={config.midLeftPanel.title}>

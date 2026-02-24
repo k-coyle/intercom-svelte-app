@@ -206,6 +206,7 @@
 
 <ReportCanvas
 	reportKey="sessions"
+	disableFallback={true}
 	{topKpisOverride}
 	{bottomLeftLinesOverride}
 	{bottomRightTableOverride}

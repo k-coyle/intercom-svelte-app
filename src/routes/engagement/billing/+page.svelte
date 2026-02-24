@@ -199,6 +199,7 @@
 
 <ReportCanvas
 	reportKey="billing"
+	disableFallback={true}
 	{topKpisOverride}
 	{bottomLeftLinesOverride}
 	{bottomRightTableOverride}

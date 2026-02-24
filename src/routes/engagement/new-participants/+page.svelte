@@ -206,6 +206,7 @@
 
 <ReportCanvas
 	reportKey="enrolled"
+	disableFallback={true}
 	{topKpisOverride}
 	{bottomLeftLinesOverride}
 	{bottomRightTableOverride}
