@@ -14,7 +14,7 @@ import {
 	STEP_SAFETY_MS,
 	timeLeftMs
 } from '$lib/server/job-runtime';
-import { coerceMonthYearLabel } from '$lib/server/report-time';
+import { coerceMonthYearLabel, computeMonthWindow, REPORT_TIMEZONE } from '$lib/server/report-time';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
@@ -26,7 +26,6 @@ const CHANNEL_ATTR_KEY = INTERCOM_ATTR_CHANNEL;
 // Engagement definition
 const ENGAGED_DAYS = 57; // "<57 days ago"
 const ENGAGED_TAIL_DAYS = ENGAGED_DAYS - 1; // 56
-const REPORT_TZ = 'America/New_York';
 
 // Channels that count as billing "qualifying sessions"
 const SESSION_CHANNELS = ['Phone', 'Video Conference'] as const;
@@ -123,7 +122,6 @@ function cleanExpiredJobs(nowMs: number) {
 	}
 }
 
-
 async function intercomRequestWithDeadline(
 	path: string,
 	init: RequestInit,
@@ -136,82 +134,9 @@ async function intercomRequestWithDeadline(
 	});
 }
 
-function getTzOffsetMinutes(date: Date, timeZone: string): number {
-	const dtf = new Intl.DateTimeFormat('en-US', {
-		timeZone,
-		year: 'numeric',
-		month: '2-digit',
-		day: '2-digit',
-		hour: '2-digit',
-		minute: '2-digit',
-		second: '2-digit',
-		hour12: false
-	});
-
-	const parts = dtf.formatToParts(date);
-	const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
-
-	const y = get('year');
-	const m = get('month');
-	const d = get('day');
-	const hh = get('hour');
-	const mm = get('minute');
-	const ss = get('second');
-
-	const asIfUtc = Date.UTC(y, m - 1, d, hh, mm, ss);
-	return Math.round((asIfUtc - date.getTime()) / 60000);
-}
-
-function zonedTimeToUtcUnix(
-	year: number,
-	monthIndex0: number,
-	day: number,
-	hour: number,
-	minute: number,
-	second: number,
-	timeZone: string
-): number {
-	const guessUtcMs = Date.UTC(year, monthIndex0, day, hour, minute, second);
-	const offsetMin = getTzOffsetMinutes(new Date(guessUtcMs), timeZone);
-	const utcMs = guessUtcMs - offsetMin * 60_000;
-	return Math.floor(utcMs / 1000);
-}
-
-function computeMonthWindowNY(monthYearLabel: string): {
-	year: number;
-	month: number;
-	monthStartUnix: number;
-	monthEndUnix: number;
-	monthStartISO: string;
-	monthEndISO: string;
-} {
-	const m = /^(\d{4})-(\d{2})$/.exec(monthYearLabel);
-	if (!m) throw new Error(`Invalid monthYearLabel: ${monthYearLabel} (expected YYYY-MM)`);
-
-	const year = Number(m[1]);
-	const month = Number(m[2]);
-	if (month < 1 || month > 12) throw new Error(`Invalid month: ${month}`);
-
-	const monthIndex0 = month - 1;
-	const monthStartUnix = zonedTimeToUtcUnix(year, monthIndex0, 1, 0, 0, 0, REPORT_TZ);
-
-	const nextYear = month === 12 ? year + 1 : year;
-	const nextMonthIndex0 = month === 12 ? 0 : monthIndex0 + 1;
-	const monthEndUnix = zonedTimeToUtcUnix(nextYear, nextMonthIndex0, 1, 0, 0, 0, REPORT_TZ);
-
-	return {
-		year,
-		month,
-		monthStartUnix,
-		monthEndUnix,
-		monthStartISO: new Date(monthStartUnix * 1000).toISOString(),
-		monthEndISO: new Date(monthEndUnix * 1000).toISOString()
-	};
-}
-
 function createJob(monthYearLabel: string): BillingJobState {
 	const { year, month, monthStartUnix, monthEndUnix, monthStartISO, monthEndISO } =
-		computeMonthWindowNY(monthYearLabel);
+		computeMonthWindow(monthYearLabel, REPORT_TIMEZONE);
 
 	const engagedTailWindowStartUnix = monthStartUnix - ENGAGED_TAIL_DAYS * SECONDS_PER_DAY;
 
@@ -645,7 +570,11 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	if (op === 'create') {
 		try {
-			const monthYearLabel = coerceMonthYearLabel(body?.monthYearLabel, new Date(), REPORT_TZ);
+			const monthYearLabel = coerceMonthYearLabel(
+				body?.monthYearLabel,
+				new Date(),
+				REPORT_TIMEZONE
+			);
 			const job = createJob(monthYearLabel);
 			return new Response(
 				JSON.stringify({
