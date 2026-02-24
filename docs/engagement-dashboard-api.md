@@ -25,37 +25,37 @@ This document defines the backend contracts used by the `/engagement` dashboard 
 
 ```json
 {
-  "monthYearLabel": "2026-02",
-  "timeZone": "America/New_York",
-  "window": {
-    "monthStart": "2026-02-01T05:00:00.000Z",
-    "monthEnd": "2026-03-01T05:00:00.000Z",
-    "elapsedEnd": "2026-02-24T05:00:00.000Z",
-    "elapsedDays": 24
-  },
-  "kpis": {
-    "newRegistrationsMtd": {
-      "count": 0,
-      "priorCount": 0,
-      "deltaCount": 0,
-      "deltaPct": 0,
-      "sparkline": [0, 0, 0]
-    },
-    "newEnrolleesMtd": {
-      "count": 0,
-      "priorCount": 0,
-      "deltaCount": 0,
-      "deltaPct": 0,
-      "sparkline": [0, 0, 0]
-    },
-    "qualifyingSessionsMtd": {
-      "count": 0,
-      "priorCount": 0,
-      "deltaCount": 0,
-      "deltaPct": 0,
-      "sparkline": [0, 0, 0]
-    }
-  }
+	"monthYearLabel": "2026-02",
+	"timeZone": "America/New_York",
+	"window": {
+		"monthStart": "2026-02-01T05:00:00.000Z",
+		"monthEnd": "2026-03-01T05:00:00.000Z",
+		"elapsedEnd": "2026-02-24T05:00:00.000Z",
+		"elapsedDays": 24
+	},
+	"kpis": {
+		"newRegistrationsMtd": {
+			"count": 0,
+			"priorCount": 0,
+			"deltaCount": 0,
+			"deltaPct": 0,
+			"sparkline": [0, 0, 0]
+		},
+		"newEnrolleesMtd": {
+			"count": 0,
+			"priorCount": 0,
+			"deltaCount": 0,
+			"deltaPct": 0,
+			"sparkline": [0, 0, 0]
+		},
+		"qualifyingSessionsMtd": {
+			"count": 0,
+			"priorCount": 0,
+			"deltaCount": 0,
+			"deltaPct": 0,
+			"sparkline": [0, 0, 0]
+		}
+	}
 }
 ```
 
@@ -82,6 +82,12 @@ Heavy report endpoints should follow the same lifecycle:
   - `GET ...&view=summary|participants|report` for result views
 - Legacy mode (compatibility window):
   - `POST` with no `op` still returns the full report payload synchronously.
+
+## Billing Month Selection
+
+- Endpoint: `POST /API/engagement/billing` with `op=create`
+- `monthYearLabel` is optional (`YYYY-MM`).
+- If omitted, backend defaults to the current month in `America/New_York`.
 
 ## Compatibility Policy
 
