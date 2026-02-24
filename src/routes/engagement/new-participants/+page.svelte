@@ -1,11 +1,16 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
+	import * as Card from '$lib/components/ui/card';
+	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
 	import {
+		fetchAllNewParticipantsRows,
 		cleanupNewParticipantsJob,
 		fetchNewParticipantsView,
 		runNewParticipantsJobUntilComplete
 	} from '$lib/client/new-participants-job';
+	import { MAX_LOOKBACK_DAYS, parseLookbackDays } from '$lib/client/report-utils';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
 	const DEFAULT_LOOKBACK_DAYS = 365;
@@ -30,13 +35,13 @@
 		participantAt: number | null;
 		lastSessionAt: number | null;
 		daysWithoutSession: number | null;
+		coachIds: string[];
 		coachNames: string[];
-	};
-
-	type NewParticipantsRowsResponse = {
-		items: NewParticipantsRow[];
-		total: number;
-		nextOffset: number | null;
+		buckets: {
+			gt_14_to_21: boolean;
+			gt_21_to_28: boolean;
+			gt_28: boolean;
+		};
 	};
 
 	let topKpisOverride: KpiItem[] | null = null;
@@ -47,6 +52,19 @@
 		rows?: Record<string, any>[];
 		footerText?: string;
 	} | null = null;
+
+	let loadedSummary: NewParticipantsSummaryResponse | null = null;
+	let loadedRows: NewParticipantsRow[] = [];
+	let loading = false;
+	let error: string | null = null;
+
+	let selectedLookbackDays = String(DEFAULT_LOOKBACK_DAYS);
+	let selectedCoachId = '';
+	let selectedClient = '';
+	let rangeStart = '';
+	let rangeEnd = '';
+	let uniqueCoaches: Array<{ id: string; name: string }> = [];
+	let uniqueClients: string[] = [];
 
 	let activeJobId = '';
 	let controller: AbortController | null = null;
@@ -77,38 +95,35 @@
 		};
 	}
 
-	function mapTopKpis(summary: NewParticipantsSummaryResponse): KpiItem[] {
+	function mapTopKpis(rows: NewParticipantsRow[]): KpiItem[] {
+		const total = rows.length;
+		const gt_14_to_21 = rows.filter((row) => row.buckets?.gt_14_to_21).length;
+		const gt_21_to_28 = rows.filter((row) => row.buckets?.gt_21_to_28).length;
+		const gt_28 = rows.filter((row) => row.buckets?.gt_28).length;
+
 		return [
-			buildKpi(
-				'15-21 days without session',
-				summary.summary?.gt_14_to_21 ?? 0,
-				summary.totalParticipants ?? 0
-			),
-			buildKpi(
-				'22-28 days without session',
-				summary.summary?.gt_21_to_28 ?? 0,
-				summary.totalParticipants ?? 0
-			),
-			buildKpi(
-				'> 28 days without session',
-				summary.summary?.gt_28 ?? 0,
-				summary.totalParticipants ?? 0
-			)
+			buildKpi('15-21 days without session', gt_14_to_21, total),
+			buildKpi('22-28 days without session', gt_21_to_28, total),
+			buildKpi('> 28 days without session', gt_28, total)
 		];
 	}
 
-	function mapBottomLeft(summary: NewParticipantsSummaryResponse): string[] {
+	function mapBottomLeft(summary: NewParticipantsSummaryResponse, rows: NewParticipantsRow[]): string[] {
+		const gt_14_to_21 = rows.filter((row) => row.buckets?.gt_14_to_21).length;
+		const gt_21_to_28 = rows.filter((row) => row.buckets?.gt_21_to_28).length;
+		const gt_28 = rows.filter((row) => row.buckets?.gt_28).length;
+
 		return [
 			`Lookback window: last ${summary.lookbackDays} days`,
 			`Generated at: ${formatIsoDate(summary.generatedAt)}`,
-			`Participants loaded: ${summary.totalParticipants}`,
-			`15-21 days without session: ${summary.summary?.gt_14_to_21 ?? 0}`,
-			`22-28 days without session: ${summary.summary?.gt_21_to_28 ?? 0}`,
-			`> 28 days without session: ${summary.summary?.gt_28 ?? 0}`
+			`Filtered participants: ${rows.length} of ${loadedRows.length}`,
+			`15-21 days without session: ${gt_14_to_21}`,
+			`22-28 days without session: ${gt_21_to_28}`,
+			`> 28 days without session: ${gt_28}`
 		];
 	}
 
-	function mapTable(data: NewParticipantsRowsResponse): {
+	function mapTable(data: NewParticipantsRow[]): {
 		title: string;
 		columns: TableColumn[];
 		rows: Record<string, any>[];
@@ -123,7 +138,7 @@
 			{ key: 'coaches', header: 'Coaches' }
 		];
 
-		const rows = (data.items ?? []).map((item) => ({
+		const rows = data.slice(0, TABLE_LIMIT).map((item) => ({
 			member: item.memberName ?? item.memberEmail ?? item.memberId,
 			client: item.client ?? '-',
 			enrolledDate: formatUnixDate(item.participantAt),
@@ -140,17 +155,94 @@
 			title: 'Recent Enrollments',
 			columns,
 			rows,
-			footerText: `Showing 1-${shown} of ${data.total} entries`
+			footerText: `Showing 1-${shown} of ${data.length} entries`
 		};
+	}
+
+	function buildFilterOptions(): void {
+		const coachById = new Map<string, string>();
+		const clientSet = new Set<string>();
+
+		for (const row of loadedRows) {
+			row.coachIds.forEach((id, index) => {
+				if (!coachById.has(id)) {
+					coachById.set(id, row.coachNames[index] ?? id);
+				}
+			});
+
+			if (row.client) {
+				clientSet.add(row.client);
+			}
+		}
+
+		uniqueCoaches = [...coachById.entries()]
+			.map(([id, name]) => ({ id, name }))
+			.sort((a, b) => a.name.localeCompare(b.name));
+		uniqueClients = [...clientSet].sort((a, b) => a.localeCompare(b));
+	}
+
+	function filteredRows(): NewParticipantsRow[] {
+		let rows = loadedRows;
+
+		if (selectedCoachId) {
+			rows = rows.filter((row) => row.coachIds.includes(selectedCoachId));
+		}
+
+		if (selectedClient) {
+			rows = rows.filter((row) => row.client === selectedClient);
+		}
+
+		if (rangeStart) {
+			const startUnix = Math.floor(Date.parse(rangeStart) / 1000);
+			rows = rows.filter((row) => row.participantAt != null && row.participantAt >= startUnix);
+		}
+
+		if (rangeEnd) {
+			const endUnix = Math.floor(Date.parse(rangeEnd) / 1000) + 24 * 60 * 60;
+			rows = rows.filter((row) => row.participantAt != null && row.participantAt < endUnix);
+		}
+
+		return [...rows].sort((a, b) => {
+			const aDays = a.daysWithoutSession ?? -1;
+			const bDays = b.daysWithoutSession ?? -1;
+			return bDays - aDays;
+		});
+	}
+
+	function recomputeDisplay(): void {
+		if (!loadedSummary) {
+			topKpisOverride = null;
+			bottomLeftLinesOverride = null;
+			bottomRightTableOverride = null;
+			return;
+		}
+
+		const rows = filteredRows();
+		topKpisOverride = mapTopKpis(rows);
+		bottomLeftLinesOverride = mapBottomLeft(loadedSummary, rows);
+		bottomRightTableOverride = mapTable(rows);
+	}
+
+	function resetFilters(): void {
+		selectedCoachId = '';
+		selectedClient = '';
+		rangeStart = '';
+		rangeEnd = '';
 	}
 
 	async function loadNewParticipants(): Promise<void> {
 		if (!controller) return;
 
+		loading = true;
+		error = null;
+
 		let jobIdForCleanup = '';
 		try {
+			const lookbackDays = parseLookbackDays(selectedLookbackDays);
+			selectedLookbackDays = String(lookbackDays);
+
 			const { jobId } = await runNewParticipantsJobUntilComplete({
-				lookbackDays: DEFAULT_LOOKBACK_DAYS,
+				lookbackDays,
 				signal: controller.signal,
 				onJobCreated: (createdJobId) => {
 					activeJobId = createdJobId;
@@ -167,28 +259,39 @@
 					undefined,
 					controller.signal
 				),
-				fetchNewParticipantsView<NewParticipantsRowsResponse>(
+				fetchAllNewParticipantsRows<NewParticipantsRow>({
 					jobId,
-					'participants',
-					0,
-					TABLE_LIMIT,
-					controller.signal
-				)
+					limit: 1000,
+					signal: controller.signal
+				})
 			]);
 
-			topKpisOverride = mapTopKpis(summary);
-			bottomLeftLinesOverride = mapBottomLeft(summary);
-			bottomRightTableOverride = mapTable(rows);
-		} catch {
+			loadedSummary = summary;
+			loadedRows = rows;
+			buildFilterOptions();
+			recomputeDisplay();
+		} catch (e: any) {
+			error = e?.message ?? 'Unable to load enrolled participants report.';
+			loadedSummary = null;
+			loadedRows = [];
 			topKpisOverride = null;
 			bottomLeftLinesOverride = null;
 			bottomRightTableOverride = null;
 		} finally {
+			loading = false;
 			if (jobIdForCleanup) {
 				void cleanupNewParticipantsJob(jobIdForCleanup);
 				if (activeJobId === jobIdForCleanup) activeJobId = '';
 			}
 		}
+	}
+
+	$: if (loadedSummary) {
+		selectedCoachId;
+		selectedClient;
+		rangeStart;
+		rangeEnd;
+		recomputeDisplay();
 	}
 
 	onMount(() => {
@@ -204,10 +307,74 @@
 	});
 </script>
 
-<ReportCanvas
-	reportKey="enrolled"
-	disableFallback={true}
-	{topKpisOverride}
-	{bottomLeftLinesOverride}
-	{bottomRightTableOverride}
-/>
+<div class="space-y-4">
+	<Card.Root>
+		<Card.Header class="pb-3">
+			<Card.Title class="text-base">Enrolled Filters</Card.Title>
+			<Card.Description>Restore legacy enrolled participants filters.</Card.Description>
+		</Card.Header>
+		<Card.Content class="space-y-4">
+			<div class="grid gap-3 md:grid-cols-4">
+				<div class="space-y-1">
+					<label class="text-xs font-medium text-muted-foreground" for="lookbackDays">Lookback Days</label>
+					<Input id="lookbackDays" type="number" min="1" max={MAX_LOOKBACK_DAYS} bind:value={selectedLookbackDays} />
+				</div>
+				<div class="space-y-1">
+					<label class="text-xs font-medium text-muted-foreground" for="coachFilter">Coach</label>
+					<select
+						id="coachFilter"
+						class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+						bind:value={selectedCoachId}
+					>
+						<option value="">All coaches</option>
+						{#each uniqueCoaches as coach}
+							<option value={coach.id}>{coach.name}</option>
+						{/each}
+					</select>
+				</div>
+				<div class="space-y-1">
+					<label class="text-xs font-medium text-muted-foreground" for="clientFilter">Client</label>
+					<select
+						id="clientFilter"
+						class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+						bind:value={selectedClient}
+					>
+						<option value="">All clients</option>
+						{#each uniqueClients as client}
+							<option value={client}>{client}</option>
+						{/each}
+					</select>
+				</div>
+				<div class="flex items-end gap-2">
+					<Button class="w-full" onclick={loadNewParticipants} disabled={loading}>
+						{loading ? 'Loading...' : 'Run'}
+					</Button>
+					<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset</Button>
+				</div>
+			</div>
+
+			<div class="grid gap-3 md:grid-cols-2">
+				<div class="space-y-1">
+					<label class="text-xs font-medium text-muted-foreground" for="rangeStart">Enrolled Start</label>
+					<Input id="rangeStart" type="date" bind:value={rangeStart} />
+				</div>
+				<div class="space-y-1">
+					<label class="text-xs font-medium text-muted-foreground" for="rangeEnd">Enrolled End</label>
+					<Input id="rangeEnd" type="date" bind:value={rangeEnd} />
+				</div>
+			</div>
+
+			{#if error}
+				<p class="text-sm text-destructive">{error}</p>
+			{/if}
+		</Card.Content>
+	</Card.Root>
+
+	<ReportCanvas
+		reportKey="enrolled"
+		disableFallback={true}
+		{topKpisOverride}
+		{bottomLeftLinesOverride}
+		{bottomRightTableOverride}
+	/>
+</div>
