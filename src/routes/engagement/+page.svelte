@@ -1,9 +1,38 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import * as Accordion from '$lib/components/ui/accordion/index.js';
   import { Badge } from '$lib/components/ui/badge/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as Card from '$lib/components/ui/card/index.js';
   import { Separator } from '$lib/components/ui/separator/index.js';
+  import { fetchOverviewReport, type OverviewResponse } from '$lib/client/overview-report';
+
+  let overview: OverviewResponse | null = null;
+  let overviewLoading = false;
+  let overviewError: string | null = null;
+
+  function formatDelta(delta: number, pct: number | null): string {
+    const signed = delta >= 0 ? `+${delta}` : String(delta);
+    if (pct == null) return `${signed} vs prior MTD`;
+    const signedPct = pct >= 0 ? `+${pct.toFixed(2)}%` : `${pct.toFixed(2)}%`;
+    return `${signed} (${signedPct}) vs prior MTD`;
+  }
+
+  async function loadOverview() {
+    overviewLoading = true;
+    overviewError = null;
+    try {
+      overview = await fetchOverviewReport();
+    } catch (e: any) {
+      overviewError = e?.message ?? String(e);
+    } finally {
+      overviewLoading = false;
+    }
+  }
+
+  onMount(() => {
+    loadOverview();
+  });
 
   type ReportLink = {
     id: string;
@@ -259,6 +288,64 @@
       truth for how each report is calculated and where each dataset comes from.
     </p>
   </div>
+
+  <section class="space-y-3">
+    <div class="flex items-center justify-between">
+      <h2 class="text-lg font-medium">Overview KPIs (MTD)</h2>
+      {#if overview}
+        <span class="text-xs text-muted-foreground">
+          {overview.monthYearLabel} · {overview.timeZone}
+        </span>
+      {/if}
+    </div>
+
+    {#if overviewError}
+      <p class="text-sm text-destructive">Unable to load overview KPIs: {overviewError}</p>
+    {:else if overviewLoading}
+      <p class="text-sm text-muted-foreground">Loading overview KPIs...</p>
+    {:else if overview}
+      <div class="grid gap-3 md:grid-cols-3">
+        <Card.Root>
+          <Card.Header class="pb-2">
+            <Card.Description>New registrations</Card.Description>
+            <Card.Title class="text-2xl">{overview.kpis.newRegistrationsMtd.count}</Card.Title>
+          </Card.Header>
+          <Card.Content class="text-xs text-muted-foreground">
+            {formatDelta(
+              overview.kpis.newRegistrationsMtd.deltaCount,
+              overview.kpis.newRegistrationsMtd.deltaPct
+            )}
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root>
+          <Card.Header class="pb-2">
+            <Card.Description>New enrollees</Card.Description>
+            <Card.Title class="text-2xl">{overview.kpis.newEnrolleesMtd.count}</Card.Title>
+          </Card.Header>
+          <Card.Content class="text-xs text-muted-foreground">
+            {formatDelta(
+              overview.kpis.newEnrolleesMtd.deltaCount,
+              overview.kpis.newEnrolleesMtd.deltaPct
+            )}
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root>
+          <Card.Header class="pb-2">
+            <Card.Description>Qualifying coaching sessions</Card.Description>
+            <Card.Title class="text-2xl">{overview.kpis.qualifyingSessionsMtd.count}</Card.Title>
+          </Card.Header>
+          <Card.Content class="text-xs text-muted-foreground">
+            {formatDelta(
+              overview.kpis.qualifyingSessionsMtd.deltaCount,
+              overview.kpis.qualifyingSessionsMtd.deltaPct
+            )}
+          </Card.Content>
+        </Card.Root>
+      </div>
+    {/if}
+  </section>
 
   <div class="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)]">
     <section class="space-y-4">
