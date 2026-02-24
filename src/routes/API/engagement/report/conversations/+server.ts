@@ -18,6 +18,7 @@ import {
   INTERCOM_ATTR_SERVICE_CODE
 } from '$lib/server/intercom-attrs';
 import { isQualifyingCoachingSession } from '$lib/server/engagement-rules';
+import { createReportLogger } from '$lib/server/report-logger';
 
 type ReturnMode = 'file' | 'stream' | 'json';
 
@@ -37,6 +38,7 @@ type ConversationsExportRequestBody = {
 };
 
 type AdminInfo = { id: string; name: string; email: string | null };
+const log = createReportLogger('engagement-conversations-export');
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 const MAX_LOOKBACK_DAYS = 365;
@@ -90,7 +92,7 @@ async function fetchAdminMap(): Promise<Map<string, AdminInfo>> {
       });
     }
   } catch (err: any) {
-    console.warn('Warning: unable to fetch admins map:', err?.message ?? err);
+    log.warn('admins_map_failed', { message: err?.message ?? String(err) });
   }
 
   return map;
@@ -271,7 +273,11 @@ async function searchConversationsCreatedSince(
     extractItems: extractIntercomConversations,
     onPage: ({ page, items, totalCount }) => {
       const count = totalCount ?? 'unknown';
-      console.log(`conversations-export page ${page}: got ${items} conversations (total_count=${count})`);
+      log.debug('conversations_page', {
+        page,
+        count: items,
+        totalCount: count
+      });
     }
   });
 }
@@ -327,12 +333,12 @@ export const POST: RequestHandler = async ({ request }) => {
     const nowUnix = Math.floor(Date.now() / 1000);
     const sinceUnix = nowUnix - lookbackDays * SECONDS_PER_DAY;
 
-    console.log('Starting conversations export:', {
+    log.info('export_start', {
       lookbackDays,
       sinceUnix,
       filterField: 'created_at',
       returnMode: mode,
-      outputPath: outPathAbs,
+      outputPath: outPathAbs ?? null,
       perPage,
       requireUserName,
       detailsConcurrency
@@ -340,7 +346,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
     // 1) Fetch conversation list in the window (created_at)
     const conversations = await searchConversationsCreatedSince(sinceUnix, perPage);
-    console.log(`Total conversations fetched (search): ${conversations.length}`);
+    log.info('conversations_fetched', { count: conversations.length });
 
     // 2) Fetch admin map (id -> name)
     const adminMap = await fetchAdminMap();
@@ -354,7 +360,10 @@ export const POST: RequestHandler = async ({ request }) => {
       try {
         return await fetchConversationDetails(id);
       } catch (e: any) {
-        console.warn('Failed to fetch conversation details:', id, e?.message ?? e);
+        log.warn('conversation_detail_failed', {
+          conversationId: id,
+          message: e?.message ?? String(e)
+        });
         return null;
       }
     });
@@ -382,7 +391,10 @@ export const POST: RequestHandler = async ({ request }) => {
     const contactMap = await fetchContactsByIds(contactIds, {
       concurrency: 10,
       onError: (contactId, error) => {
-        console.warn('Failed to hydrate contact', contactId, error);
+        log.warn('contact_hydration_failed', {
+          contactId,
+          message: String(error)
+        });
       }
     });
 
@@ -554,7 +566,7 @@ export const POST: RequestHandler = async ({ request }) => {
       }
     });
   } catch (e: any) {
-    console.error('Conversations export failed:', e?.message ?? e);
+    log.error('export_failed', { message: e?.message ?? String(e) });
     return new Response(
       JSON.stringify({
         error: 'Conversations export failed',

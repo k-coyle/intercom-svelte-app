@@ -1,5 +1,6 @@
 // src/routes/API/engagement/caseload/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import { intercomRequest as intercomApiRequest } from '$lib/server/intercom';
 import {
   INTERCOM_ATTR_CHANNEL,
@@ -14,6 +15,7 @@ import {
   STEP_SAFETY_MS,
   timeLeftMs
 } from '$lib/server/job-runtime';
+import { createReportLogger } from '$lib/server/report-logger';
 import { randomUUID, createHash } from 'crypto';
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
@@ -153,12 +155,14 @@ interface CaseloadJobState {
 const jobs = new Map<string, CaseloadJobState>();
 
 // ---------- Audit logging ----------
-// Goal: human-readable, low-noise logs by default.
-// Set CASELOAD_LOG_LEVEL=debug to emit per-request/per-page details.
-type LogLevel = 'quiet' | 'info' | 'debug';
-const LOG_LEVEL: LogLevel = (process.env.CASELOAD_LOG_LEVEL as LogLevel) || 'info';
-const DEBUG = LOG_LEVEL === 'debug';
-const QUIET = LOG_LEVEL === 'quiet';
+type CaseloadLogLevel = 'quiet' | 'info' | 'debug';
+const CASELOAD_LOG_LEVEL: CaseloadLogLevel =
+  env.CASELOAD_LOG_LEVEL === 'debug' || env.CASELOAD_LOG_LEVEL === 'quiet'
+    ? (env.CASELOAD_LOG_LEVEL as CaseloadLogLevel)
+    : 'info';
+const DEBUG = CASELOAD_LOG_LEVEL === 'debug';
+const QUIET = CASELOAD_LOG_LEVEL === 'quiet';
+const reportLog = createReportLogger('engagement-caseload');
 
 function hashId(id: string) {
   try {
@@ -177,33 +181,16 @@ function audit(
   if (QUIET) return;
   if (!DEBUG && level === 'debug') return;
 
-  // Keep log lines compact and readable (and avoid PHI).
-  const base = [`CONSUL_AUDIT`, `job=${jobId}`, `event=${event}`];
-
-  // Only print a small set of common fields at info level.
-  const fields: string[] = [];
-  for (const [k, v] of Object.entries(data)) {
-    if (v === undefined || v === null) continue;
-    // prevent huge objects from clogging logs
-    if (typeof v === 'object') continue;
-    fields.push(`${k}=${String(v)}`);
+  const fields = { jobId, ...data };
+  if (level === 'warn') {
+    reportLog.warn(event, fields);
+    return;
   }
-
-  console.info([...base, ...fields].join(' '));
-
-  // In debug, also emit the full JSON payload for deep troubleshooting.
-  if (DEBUG) {
-    console.info(
-      'CONSUL_AUDIT_JSON ' +
-        JSON.stringify({
-          ts: new Date().toISOString(),
-          service: 'engagement-caseload',
-          jobId,
-          event,
-          ...data
-        })
-    );
+  if (level === 'debug') {
+    reportLog.debug(event, fields);
+    return;
   }
+  reportLog.info(event, fields);
 }
 
 
