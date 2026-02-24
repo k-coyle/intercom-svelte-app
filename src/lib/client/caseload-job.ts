@@ -58,6 +58,18 @@ export async function cleanupCaseloadJob(
   }
 }
 
+export function beaconCleanupCaseloadJob(jobId: string): boolean {
+  if (!jobId) return false;
+  if (typeof navigator === 'undefined') return false;
+
+  try {
+    const payload = JSON.stringify({ op: 'cleanup', jobId });
+    return navigator.sendBeacon(CASELOAD_ENDPOINT, payload);
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchCaseloadViewPage<T>(
   jobId: string,
   view: 'summary' | 'members' | 'sessions',

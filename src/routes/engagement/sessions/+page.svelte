@@ -3,6 +3,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { browser } from '$app/environment';
   import {
+    beaconCleanupCaseloadJob,
     cleanupCaseloadJob,
     createCaseloadJob,
     fetchCaseloadViewPage,
@@ -326,12 +327,7 @@
   function beaconCleanup() {
     if (!activeJobId) return;
     if (!browser) return;
-    try {
-      const payload = JSON.stringify({ op: 'cleanup', jobId: activeJobId });
-      navigator.sendBeacon('/API/engagement/caseload', payload);
-    } catch {
-      // ignore
-    }
+    beaconCleanupCaseloadJob(activeJobId);
   }
 
   onMount(() => {
