@@ -178,6 +178,14 @@ function computeElapsedEndUnix(
   return zonedTimeToUtcUnix(year, month - 1, elapsedDays + 1, 0, 0, 0, timeZone);
 }
 
+export function computeElapsedEndUnixForMonth(
+  month: MonthWindow,
+  elapsedDays: number,
+  timeZone = REPORT_TIMEZONE
+): number {
+  return computeElapsedEndUnix(month.year, month.month, elapsedDays, timeZone);
+}
+
 export function computeMonthComparisonWindow(
   monthYearLabelInput: string | null | undefined,
   opts: { now?: Date; timeZone?: string } = {}
