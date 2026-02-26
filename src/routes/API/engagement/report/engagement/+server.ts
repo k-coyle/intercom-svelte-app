@@ -141,8 +141,11 @@ function buildContactSearchQuery(body: ExportRequestBody): any {
     });
   }
 
-  if (body.employerExclusions && body.employerExclusions.length) {
-    const excluded = body.employerExclusions.filter((v) => !!v && v.trim().length > 0);
+  if (body.employerExclusions) {
+    const exclusions = Array.isArray(body.employerExclusions)
+      ? body.employerExclusions
+      : [body.employerExclusions];
+    const excluded = exclusions.filter((v: string) => !!v && v.trim().length > 0);
 
     if (excluded.length === 1) {
       // Single value → "!="

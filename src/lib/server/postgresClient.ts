@@ -78,7 +78,7 @@ function buildPool() {
     query_timeout: env.PG_QUERY_TIMEOUT_MS ? Number(env.PG_QUERY_TIMEOUT_MS) : 20_000
   });
 
-  pool.on('error', (err) => {
+  pool.on('error', (err: unknown) => {
     // This usually indicates an idle client error; log for visibility.
     console.error('[postgres] pool error', err);
   });
