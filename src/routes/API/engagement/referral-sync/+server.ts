@@ -5,6 +5,7 @@ import {
   intercomPaginate,
   intercomRequest
 } from '$lib/server/intercom';
+import { createReportLogger } from '$lib/server/report-logger';
 import {
   INTERCOM_ATTR_ELIGIBLE_PROGRAMS,
   INTERCOM_ATTR_REFERRAL
@@ -30,6 +31,7 @@ type IntercomContact = {
   role?: string;
   custom_attributes?: Record<string, any>;
 };
+const log = createReportLogger('engagement-referral-sync');
 
 // ---------- Search contacts by Referral ----------
 
@@ -59,16 +61,15 @@ async function searchContactsByReferral(
     perPage,
     extractItems: extractIntercomContacts,
     onPage: ({ page, items, totalCount }) => {
-      const count = totalCount ?? 'unknown';
-      console.log(
-        `referral-sync contacts page ${page}: ${items} contacts (total_count=${count})`
-      );
+      log.debug('contacts_page', {
+        page,
+        pageItems: items,
+        totalCount: totalCount ?? null
+      });
     }
   });
 
-  console.log(
-    `referral-sync: total contacts fetched for Referral="${referralValue}": ${contacts.length}`
-  );
+  log.info('contacts_fetched', { referralValue, count: contacts.length });
   return contacts;
 }
 
@@ -79,6 +80,7 @@ async function runReferralSync(body: ReferralSyncRequest) {
   const referralValue = body.referralValue ?? DEFAULT_REFERRAL_VALUE;
   const eligibleValue = body.eligibleProgramsValue ?? DEFAULT_ELIGIBLE_VALUE;
   const perPage = coerceIntercomPerPage(body.perPage);
+  log.info('sync_start', { dryRun, referralValue, eligibleValue, perPage });
 
   const contacts = await searchContactsByReferral(referralValue, perPage);
 
@@ -105,19 +107,13 @@ async function runReferralSync(body: ReferralSyncRequest) {
     };
 
     if (dryRun) {
-      console.log(
-        `[DRY RUN] Would set "${ATTR_ELIGIBLE_PROGRAMS}"="${eligibleValue}" for contact`,
-        contact.id
-      );
+      log.debug('contact_update_dry_run', { contactId: contact.id });
     } else {
       await intercomRequest(`/contacts/${contact.id}`, {
         method: 'PUT',
         body: JSON.stringify(payload)
       });
-      console.log(
-        `[UPDATED] Set "${ATTR_ELIGIBLE_PROGRAMS}"="${eligibleValue}" for contact`,
-        contact.id
-      );
+      log.debug('contact_updated', { contactId: contact.id });
     }
 
     contactsUpdated++;
@@ -141,12 +137,13 @@ export const POST: RequestHandler = async ({ request }) => {
   try {
     const body = (await request.json()) as ReferralSyncRequest;
     const summary = await runReferralSync(body);
+    log.info('sync_complete', summary);
 
     return new Response(JSON.stringify(summary), {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (e: any) {
-    console.error('Intercom referral-sync failed:', e?.message ?? e);
+    log.error('sync_failed', { message: e?.message ?? String(e) });
     return new Response(
       JSON.stringify({
         error: 'Intercom referral-sync failed',

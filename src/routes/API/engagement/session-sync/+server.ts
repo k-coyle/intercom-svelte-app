@@ -5,6 +5,7 @@ import {
   intercomRequest,
   INTERCOM_MAX_PER_PAGE
 } from '$lib/server/intercom';
+import { createReportLogger } from '$lib/server/report-logger';
 import {
   INTERCOM_ATTR_CHANNEL,
   INTERCOM_ATTR_ENROLLED_DATE,
@@ -44,6 +45,7 @@ type SessionSyncRequest = {
 
 type IntercomConversation = any;
 type IntercomContact = any;
+const log = createReportLogger('engagement-session-sync');
 
 // ---------- Conversations search ----------
 
@@ -60,14 +62,15 @@ async function searchConversationsSince(sinceUnix: number): Promise<IntercomConv
     perPage: INTERCOM_MAX_PER_PAGE,
     extractItems: extractIntercomConversations,
     onPage: ({ page, items, totalCount }) => {
-      const count = totalCount ?? 'unknown';
-      console.log(
-        `session-sync conversations page ${page}: ${items} convos (total_count=${count})`
-      );
+      log.debug('conversations_page', {
+        page,
+        pageItems: items,
+        totalCount: totalCount ?? null
+      });
     }
   });
 
-  console.log(`session-sync: total conversations fetched: ${conversations.length}`);
+  log.info('conversations_fetched', { count: conversations.length });
   return conversations;
 }
 
@@ -86,7 +89,7 @@ async function updateContactCustomAttributes(
   const body = { custom_attributes: attrs };
 
   if (dryRun) {
-    console.log('[DRY RUN] Would update contact', contactId, body);
+    log.debug('contact_update_dry_run', { contactId });
     return;
   }
 
@@ -95,7 +98,7 @@ async function updateContactCustomAttributes(
     body: JSON.stringify(body)
   });
 
-  console.log('[UPDATED] Contact', contactId, body);
+  log.debug('contact_updated', { contactId });
 }
 
 // ---------- Core session sync ----------
@@ -104,9 +107,7 @@ async function runSessionSync(lookbackDays: number, mode: Mode, dryRun: boolean)
   const nowUnix = Math.floor(Date.now() / 1000);
   const sinceUnix = nowUnix - lookbackDays * SECONDS_PER_DAY;
 
-  console.log(
-    `Session sync: lookbackDays=${lookbackDays}, mode=${mode}, dryRun=${dryRun}, sinceUnix=${sinceUnix}`
-  );
+  log.info('sync_start', { lookbackDays, mode, dryRun, sinceUnix });
 
   const conversations = await searchConversationsSince(sinceUnix);
 
@@ -173,10 +174,11 @@ async function runSessionSync(lookbackDays: number, mode: Mode, dryRun: boolean)
     }
   }
 
-  console.log(
-    `Session sync processed ${totalConversations} conversations, ` +
-      `${qualifyingSessions} qualifying sessions, ${qualifyingCalls} qualifying calls`
-  );
+  log.info('sync_scan_complete', {
+    totalConversations,
+    qualifyingSessions,
+    qualifyingCalls
+  });
 
   // Build the set of contacts we need to inspect/update
   const contactIds = new Set<string>();
@@ -188,7 +190,7 @@ async function runSessionSync(lookbackDays: number, mode: Mode, dryRun: boolean)
     for (const id of lastCallByContact.keys()) contactIds.add(id);
   }
 
-  console.log(`Session sync: contacts with potential updates: ${contactIds.size}`);
+  log.info('contacts_candidate_count', { count: contactIds.size });
 
   let contactsUpdated = 0;
 
@@ -264,7 +266,10 @@ async function runSessionSync(lookbackDays: number, mode: Mode, dryRun: boolean)
           await updateContactCustomAttributes(contactId, payload, dryRun);
           contactsUpdated++;
         } catch (err: any) {
-          console.error(`Error updating contact ${contactId}:`, err?.message ?? err);
+          log.error('contact_update_failed', {
+            contactId,
+            message: err?.message ?? String(err)
+          });
         }
       })
     );
@@ -302,13 +307,14 @@ export const POST: RequestHandler = async ({ request }) => {
     const dryRun = body.dryRun ?? true;
     const mode: Mode = body.mode ?? 'all';
 
+    log.info('sync_request', { lookbackDays, mode, dryRun });
     const summary = await runSessionSync(lookbackDays, mode, dryRun);
 
     return new Response(JSON.stringify(summary), {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (e: any) {
-    console.error('Intercom session-sync failed:', e?.message ?? e);
+    log.error('sync_failed', { message: e?.message ?? String(e) });
     return new Response(
       JSON.stringify({
         error: 'Intercom session-sync failed',

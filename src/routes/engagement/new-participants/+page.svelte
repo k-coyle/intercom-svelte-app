@@ -11,11 +11,12 @@
 		fetchNewParticipantsView,
 		runNewParticipantsJobUntilComplete
 	} from '$lib/client/new-participants-job';
+	import { DEFAULT_NEW_PARTICIPANTS_LOOKBACK_DAYS } from '$lib/client/report-defaults';
 	import { buildShareKpi, formatIsoDate, formatUnixDate } from '$lib/client/report-page-utils';
 	import { MAX_LOOKBACK_DAYS, parseLookbackDays } from '$lib/client/report-utils';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
-	const DEFAULT_LOOKBACK_DAYS = 365;
+	const DEFAULT_LOOKBACK_DAYS = DEFAULT_NEW_PARTICIPANTS_LOOKBACK_DAYS;
 	const TABLE_LIMIT = 50;
 
 	type NewParticipantsSummaryResponse = {
@@ -228,7 +229,7 @@
 				},
 				onProgress: (progress) => {
 					const p = progress?.progress ?? {};
-					progressText = `Phase ${progress?.phase ?? 'running'} · participant pages ${p.participantPagesFetched ?? 0} · conversation pages ${p.conversationPagesFetched ?? 0}`;
+					progressText = `Phase ${progress?.phase ?? 'running'} | participant pages ${p.participantPagesFetched ?? 0} | conversation pages ${p.conversationPagesFetched ?? 0}`;
 				}
 			});
 			jobIdForCleanup = jobId;
@@ -246,7 +247,7 @@
 					limit: 1000,
 					signal: controller.signal,
 					onPage: ({ loaded, total }) => {
-						progressText = `Loading participant rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+						progressText = `Loading participant rows for filters ${loaded}${total != null ? ` / ${total}` : ''}...`;
 					}
 				})
 			]);
@@ -362,3 +363,4 @@
 		{bottomRightTableOverride}
 	/>
 </div>
+

@@ -71,13 +71,20 @@ export async function fetchAllPagedViewItems<T>(opts: {
 
 	const all: T[] = [];
 	let offset = 0;
+	const seenOffsets = new Set<number>();
+	let pageCount = 0;
 
 	while (true) {
 		if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+		if (seenOffsets.has(offset)) {
+			throw new Error(`Paged view loop detected at offset ${offset}.`);
+		}
+		seenOffsets.add(offset);
 
 		const page = await opts.fetchPage(offset, limit);
 		const items = (page.items ?? []) as T[];
 		all.push(...items);
+		pageCount += 1;
 
 		const nextOffset = normalizeFiniteNumber(page.nextOffset);
 		const total = normalizeFiniteNumber(page.total);
@@ -91,6 +98,19 @@ export async function fetchAllPagedViewItems<T>(opts: {
 		}
 
 		if (nextOffset == null) break;
+		if (nextOffset <= offset) {
+			throw new Error(
+				`Invalid pagination: nextOffset ${nextOffset} must be greater than current offset ${offset}.`
+			);
+		}
+		if (items.length === 0) {
+			throw new Error(
+				`Invalid pagination: received an empty page at offset ${offset} with nextOffset ${nextOffset}.`
+			);
+		}
+		if (pageCount > 10000) {
+			throw new Error('Paging safety stop triggered after 10000 pages.');
+		}
 		offset = nextOffset;
 	}
 

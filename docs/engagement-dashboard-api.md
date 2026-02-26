@@ -89,6 +89,13 @@ Heavy report endpoints should follow the same lifecycle:
 - `monthYearLabel` is optional (`YYYY-MM`).
 - If omitted, backend defaults to the current month in `America/New_York`.
 
+## Lookback Defaults
+
+- Caseload UI default: `90` days (`src/lib/client/report-defaults.ts`).
+- Sessions UI default: `90` days (`src/lib/client/report-defaults.ts`).
+- New participants UI default: `365` days (`src/lib/client/report-defaults.ts`).
+- Session sync API default (`POST /API/engagement/session-sync`): `30` days if `lookbackDays` is omitted.
+
 ## Compatibility Policy
 
 - Legacy response modes remain active for one release cycle after async conversion.

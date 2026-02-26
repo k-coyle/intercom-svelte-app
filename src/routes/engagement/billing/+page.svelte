@@ -197,7 +197,7 @@
 				},
 				onProgress: (progress) => {
 					const p = progress?.progress ?? {};
-					progressText = `Phase ${progress?.phase ?? 'running'} · conv pages ${p.conversationPagesFetched ?? 0} · participant pages ${p.participantPagesFetched ?? 0} · contacts remaining ${p.contactsRemaining ?? 0}`;
+					progressText = `Phase ${progress?.phase ?? 'running'} | conv pages ${p.conversationPagesFetched ?? 0} | participant pages ${p.participantPagesFetched ?? 0} | contacts remaining ${p.contactsRemaining ?? 0}`;
 				}
 			});
 			jobIdForCleanup = jobId;
@@ -209,7 +209,7 @@
 					limit: 1000,
 					signal: controller.signal,
 					onPage: ({ loaded, total }) => {
-						progressText = `Loading billing rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+						progressText = `Loading billing rows for filters ${loaded}${total != null ? ` / ${total}` : ''}...`;
 					}
 				})
 			]);

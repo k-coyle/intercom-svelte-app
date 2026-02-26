@@ -5,6 +5,7 @@ import {
   intercomPaginate,
   intercomRequest
 } from '$lib/server/intercom';
+import { createReportLogger } from '$lib/server/report-logger';
 import {
   INTERCOM_ATTR_ENROLLED_DATE,
   INTERCOM_ATTR_ENGAGEMENT_STATUS,
@@ -33,6 +34,7 @@ type IntercomContact = {
   role?: string;
   custom_attributes?: Record<string, any>;
 };
+const log = createReportLogger('engagement-sync');
 
 // ----- Helpers -----
 
@@ -94,14 +96,15 @@ async function searchParticipants(
     perPage,
     extractItems: extractIntercomContacts,
     onPage: ({ page, items, totalCount }) => {
-      const count = totalCount ?? 'unknown';
-      console.log(
-        `engagement-sync contacts page ${page}: ${items} contacts (total_count=${count})`
-      );
+      log.debug('participants_page', {
+        page,
+        pageItems: items,
+        totalCount: totalCount ?? null
+      });
     }
   });
 
-  console.log(`engagement-sync: total participants fetched: ${participants.length}`);
+  log.info('participants_fetched', { count: participants.length });
   return participants;
 }
 
@@ -145,6 +148,11 @@ function computeNewStatus(
 async function runEngagementSync(body: EngagementSyncRequest) {
   const nowUnix = Math.floor(Date.now() / 1000);
   const dryRun = body.dryRun ?? true;
+  log.info('sync_start', {
+    dryRun,
+    enrolledLookbackDays: body.enrolledLookbackDays ?? null,
+    perPage: body.perPage ?? null
+  });
 
   const participants = await searchParticipants(nowUnix, body);
 
@@ -200,13 +208,13 @@ async function runEngagementSync(body: EngagementSyncRequest) {
       };
 
       if (dryRun) {
-        console.log('[DRY RUN] Would update contact', contact.id, payload);
+        log.debug('contact_update_dry_run', { contactId: contact.id, newStatus });
       } else {
         await intercomRequest(`/contacts/${contact.id}`, {
           method: 'PUT',
           body: JSON.stringify(payload)
         });
-        console.log('[UPDATED] Contact', contact.id, payload);
+        log.debug('contact_updated', { contactId: contact.id, newStatus });
       }
 
       participantsUpdated++;
@@ -235,12 +243,13 @@ export const POST: RequestHandler = async ({ request }) => {
   try {
     const body = (await request.json()) as EngagementSyncRequest;
     const summary = await runEngagementSync(body);
+    log.info('sync_complete', summary);
 
     return new Response(JSON.stringify(summary), {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (e: any) {
-    console.error('Intercom engagement-sync failed:', e?.message ?? e);
+    log.error('sync_failed', { message: e?.message ?? String(e) });
     return new Response(
       JSON.stringify({
         error: 'Intercom engagement-sync failed',

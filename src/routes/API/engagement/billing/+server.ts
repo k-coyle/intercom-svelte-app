@@ -90,6 +90,7 @@ interface BillingJobState {
 	conversationPagesFetched: number;
 	conversationsFetched: number;
 	conversationsProcessed: number;
+	duplicateConversationsSkipped: number;
 
 	participantPagesFetched: number;
 	participantsFetched: number;
@@ -98,6 +99,7 @@ interface BillingJobState {
 	missingContacts: number;
 
 	// data accumulators
+	processedConversationIds: Set<string>;
 	lastSessionByMember: Map<string, number>;
 	newParticipantIds: Set<string>;
 	engagedIds: Set<string>;
@@ -166,6 +168,7 @@ function createJob(monthYearLabel: string): BillingJobState {
 		conversationPagesFetched: 0,
 		conversationsFetched: 0,
 		conversationsProcessed: 0,
+		duplicateConversationsSkipped: 0,
 
 		participantPagesFetched: 0,
 		participantsFetched: 0,
@@ -173,6 +176,7 @@ function createJob(monthYearLabel: string): BillingJobState {
 		contactsFetched: 0,
 		missingContacts: 0,
 
+		processedConversationIds: new Set(),
 		lastSessionByMember: new Map(),
 		newParticipantIds: new Set(),
 		engagedIds: new Set(),
@@ -233,6 +237,15 @@ async function fetchConversationsPage(
 function processConversations(job: BillingJobState, conversations: any[]) {
 	for (const conv of conversations) {
 		try {
+			const conversationId = conv?.id != null ? String(conv.id) : '';
+			if (conversationId) {
+				if (job.processedConversationIds.has(conversationId)) {
+					job.duplicateConversationsSkipped += 1;
+					continue;
+				}
+				job.processedConversationIds.add(conversationId);
+			}
+
 			const attrs = conv.custom_attributes || {};
 			const channelValue = attrs[CHANNEL_ATTR_KEY] as string | undefined;
 			if (!channelValue) continue;
@@ -445,6 +458,7 @@ function finalizeReport(job: BillingJobState) {
 	log.info('job_complete', {
 		jobId: job.id,
 		totalRows: job.report.totalRows,
+		duplicateConversationsSkipped: job.duplicateConversationsSkipped,
 		monthYearLabel: job.monthYearLabel
 	});
 }
@@ -454,6 +468,7 @@ function buildProgress(job: BillingJobState) {
 		conversationPagesFetched: job.conversationPagesFetched,
 		conversationsFetched: job.conversationsFetched,
 		conversationsProcessed: job.conversationsProcessed,
+		duplicateConversationsSkipped: job.duplicateConversationsSkipped,
 		participantPagesFetched: job.participantPagesFetched,
 		participantsFetched: job.participantsFetched,
 		membersWithSessions: job.lastSessionByMember.size,

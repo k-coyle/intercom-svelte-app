@@ -127,8 +127,10 @@ interface CaseloadJobState {
   pagesFetched: number;
   conversationsFetched: number;
   sessionsCount: number;
+  duplicateConversationsSkipped: number;
 
   // aggregation
+  processedConversationIds: Set<string>;
   memberIds: Set<string>;
   memberAgg: Map<string, MemberAgg>;
   sessions: SessionRow[];
@@ -508,6 +510,8 @@ function createJob(lookbackDays: number, untilLookbackDays?: number): CaseloadJo
     pagesFetched: 0,
     conversationsFetched: 0,
     sessionsCount: 0,
+    duplicateConversationsSkipped: 0,
+    processedConversationIds: new Set(),
     memberIds: new Set(),
     memberAgg: new Map(),
     sessions: [],
@@ -593,7 +597,17 @@ async function stepJob(job: CaseloadJobState): Promise<any> {
           job.conversationsFetched += conversations.length;
 
           let sessionsAdded = 0;
+          let duplicateConversations = 0;
           for (const conv of conversations) {
+            const conversationId = conv?.id != null ? String(conv.id) : '';
+            if (conversationId) {
+              if (job.processedConversationIds.has(conversationId)) {
+                duplicateConversations += 1;
+                continue;
+              }
+              job.processedConversationIds.add(conversationId);
+            }
+
             const s = parseSessionFromConversation(conv);
             if (!s) continue;
             job.sessions.push(s);
@@ -601,11 +615,13 @@ async function stepJob(job: CaseloadJobState): Promise<any> {
             sessionsAdded += 1;
             upsertMemberAgg(job, s);
           }
+          job.duplicateConversationsSkipped += duplicateConversations;
 
           audit(job.id, 'conversations_page', {
             page: job.pagesFetched,
             conversations: conversations.length,
             sessionsAdded,
+            duplicateConversations,
             nextCursor: nextCursor ? 'present' : null
           }, 'debug');
 
@@ -744,6 +760,7 @@ async function stepJob(job: CaseloadJobState): Promise<any> {
       audit(job.id, 'job_complete', {
         totalMembers: job.totalMembers,
         sessionsCount: job.sessionsCount,
+        duplicateConversationsSkipped: job.duplicateConversationsSkipped,
         pagesFetched: job.pagesFetched,
         conversationsFetched: job.conversationsFetched
       });
@@ -775,6 +792,7 @@ async function stepJob(job: CaseloadJobState): Promise<any> {
         pagesFetched: job.pagesFetched,
         conversationsFetched: job.conversationsFetched,
         sessionsCount: job.sessionsCount,
+        duplicateConversationsSkipped: job.duplicateConversationsSkipped,
         uniqueMembers: job.memberIds.size,
         missingContacts
       },
@@ -1025,6 +1043,7 @@ export const GET: RequestHandler = async ({ url }) => {
           pagesFetched: job.pagesFetched,
           conversationsFetched: job.conversationsFetched,
           sessionsCount: job.sessionsCount,
+          duplicateConversationsSkipped: job.duplicateConversationsSkipped,
           uniqueMembers: job.memberIds.size,
           missingContacts
         },

@@ -13,10 +13,11 @@
 		runCaseloadJobUntilComplete
 	} from '$lib/client/caseload-job';
 	import { buildShareKpi, formatIsoDate, formatUnixDate } from '$lib/client/report-page-utils';
+	import { DEFAULT_CASELOAD_LOOKBACK_DAYS } from '$lib/client/report-defaults';
 	import { MAX_LOOKBACK_DAYS, parseLookbackDays } from '$lib/client/report-utils';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
-	const DEFAULT_LOOKBACK_DAYS = 90;
+	const DEFAULT_LOOKBACK_DAYS = DEFAULT_CASELOAD_LOOKBACK_DAYS;
 	const ALL_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
 	const TABLE_LIMIT = 50;
 
@@ -266,7 +267,7 @@
 				},
 				onProgress: (progress) => {
 					const p = progress?.progress ?? {};
-					progressText = `Phase ${progress?.phase ?? 'running'} · pages ${p.pagesFetched ?? 0} · members ${p.uniqueMembers ?? 0}`;
+					progressText = `Phase ${progress?.phase ?? 'running'} | pages ${p.pagesFetched ?? 0} | members ${p.uniqueMembers ?? 0} | dup conv skipped ${p.duplicateConversationsSkipped ?? 0}`;
 				}
 			});
 			jobIdForCleanup = jobId;
@@ -285,7 +286,7 @@
 					limit: 1000,
 					signal: controller.signal,
 					onPage: ({ loaded, total }) => {
-						progressText = `Loading member rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+						progressText = `Loading member rows for filters ${loaded}${total != null ? ` / ${total}` : ''}...`;
 					}
 				})
 			]);
