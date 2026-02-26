@@ -81,7 +81,7 @@
 		</PanelCard>
 	</div>
 
-	<div class="grid gap-4 lg:grid-cols-2">
+	<div class="space-y-4">
 		<PanelCard title={config.bottomLeftPanel.title}>
 			<ul class="space-y-2 text-sm text-muted-foreground">
 				{#each bottomLeftLines as line}

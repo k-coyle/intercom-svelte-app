@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
 	import LoadStatus from '$lib/components/report/LoadStatus.svelte';
+	import MultiSelectDropdown from '$lib/components/report/MultiSelectDropdown.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
@@ -73,14 +74,9 @@
 	let loadedMembers: CaseloadMemberRow[] = [];
 
 	let selectedLookbackDays = String(DEFAULT_LOOKBACK_DAYS);
-	let selectedCoachId = '';
-	let selectedClient = '';
-	let selectedChannels: Record<SessionChannel, boolean> = {
-		Phone: true,
-		'Video Conference': true,
-		Email: true,
-		Chat: true
-	};
+	let selectedCoachIds: string[] = [];
+	let selectedClients: string[] = [];
+	let selectedChannelValues: SessionChannel[] = [...ALL_CHANNELS];
 
 	let uniqueCoaches: Array<{ id: string; name: string }> = [];
 	let uniqueClients: string[] = [];
@@ -169,14 +165,6 @@
 		};
 	}
 
-	function getSelectedChannels(): SessionChannel[] {
-		return ALL_CHANNELS.filter((channel) => selectedChannels[channel]);
-	}
-
-	function setChannelSelected(channel: SessionChannel, checked: boolean): void {
-		selectedChannels = { ...selectedChannels, [channel]: checked };
-	}
-
 	function buildFilterOptions(): void {
 		const coachById = new Map<string, string>();
 		const clientSet = new Set<string>();
@@ -199,17 +187,18 @@
 	function filteredMembers(): CaseloadMemberRow[] {
 		let members = loadedMembers;
 
-		if (selectedCoachId) {
-			members = members.filter((m) => m.coachIds.includes(selectedCoachId));
+		if (selectedCoachIds.length > 0) {
+			const selected = new Set(selectedCoachIds);
+			members = members.filter((m) => m.coachIds.some((id) => selected.has(id)));
 		}
 
-		if (selectedClient) {
-			members = members.filter((m) => m.client === selectedClient);
+		if (selectedClients.length > 0) {
+			const selected = new Set(selectedClients);
+			members = members.filter((m) => Boolean(m.client) && selected.has(m.client as string));
 		}
 
-		const channels = getSelectedChannels();
-		if (channels.length > 0 && channels.length < ALL_CHANNELS.length) {
-			const selected = new Set(channels);
+		if (selectedChannelValues.length !== ALL_CHANNELS.length) {
+			const selected = new Set(selectedChannelValues);
 			members = members.filter((m) => m.channelsUsed.some((ch) => selected.has(ch)));
 		}
 
@@ -236,14 +225,9 @@
 	}
 
 	function resetFilters(): void {
-		selectedCoachId = '';
-		selectedClient = '';
-		selectedChannels = {
-			Phone: true,
-			'Video Conference': true,
-			Email: true,
-			Chat: true
-		};
+		selectedCoachIds = [];
+		selectedClients = [];
+		selectedChannelValues = [...ALL_CHANNELS];
 	}
 
 	async function loadCaseload(): Promise<void> {
@@ -313,10 +297,10 @@
 	}
 
 	$: if (reportSummary) {
-		selectedCoachId;
-		selectedClient;
+		selectedCoachIds;
+		selectedClients;
 		selectedLookbackDays;
-		selectedChannels;
+		selectedChannelValues;
 		recomputeDisplay();
 	}
 
@@ -337,7 +321,6 @@
 	<Card.Root>
 		<Card.Header class="pb-3">
 			<Card.Title class="text-base">Caseload Filters</Card.Title>
-			<Card.Description>Use the same filtering controls as the legacy caseload page.</Card.Description>
 		</Card.Header>
 		<Card.Content class="space-y-4">
 			<div class="grid gap-3 md:grid-cols-4">
@@ -346,51 +329,36 @@
 					<Input id="lookbackDays" type="number" min="1" max={MAX_LOOKBACK_DAYS} bind:value={selectedLookbackDays} />
 				</div>
 				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="coachFilter">Coach</label>
-					<select
-						id="coachFilter"
-						class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-						bind:value={selectedCoachId}
-					>
-						<option value="">All coaches</option>
-						{#each uniqueCoaches as coach}
-							<option value={coach.id}>{coach.name}</option>
-						{/each}
-					</select>
+					<p class="text-xs font-medium text-muted-foreground">Coach</p>
+					<MultiSelectDropdown
+						placeholder="All coaches"
+						options={uniqueCoaches.map((coach) => ({ value: coach.id, label: coach.name }))}
+						bind:selected={selectedCoachIds}
+					/>
 				</div>
 				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="clientFilter">Client</label>
-					<select
-						id="clientFilter"
-						class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-						bind:value={selectedClient}
-					>
-						<option value="">All clients</option>
-						{#each uniqueClients as client}
-							<option value={client}>{client}</option>
-						{/each}
-					</select>
+					<p class="text-xs font-medium text-muted-foreground">Client</p>
+					<MultiSelectDropdown
+						placeholder="All clients"
+						options={uniqueClients.map((client) => ({ value: client, label: client }))}
+						bind:selected={selectedClients}
+					/>
 				</div>
-				<div class="flex items-end gap-2">
-					<Button class="w-full" onclick={loadCaseload} disabled={loading}>
-						{loading ? 'Loading...' : 'Run'}
-					</Button>
-					<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset</Button>
+				<div class="space-y-1">
+					<p class="text-xs font-medium text-muted-foreground">Channel</p>
+					<MultiSelectDropdown
+						placeholder="All channels"
+						options={ALL_CHANNELS.map((channel) => ({ value: channel, label: channel }))}
+						bind:selected={selectedChannelValues}
+					/>
 				</div>
 			</div>
 
-			<div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-				{#each ALL_CHANNELS as channel}
-					<label class="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
-						<input
-							type="checkbox"
-							checked={selectedChannels[channel]}
-							on:change={(event) =>
-								setChannelSelected(channel, (event.currentTarget as HTMLInputElement).checked)}
-						/>
-						<span>{channel}</span>
-					</label>
-				{/each}
+			<div class="flex items-center gap-2">
+				<Button onclick={loadCaseload} disabled={loading}>
+					{loading ? 'Loading...' : 'Run'}
+				</Button>
+				<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset</Button>
 			</div>
 
 			<LoadStatus {loading} {error} {progressText} />

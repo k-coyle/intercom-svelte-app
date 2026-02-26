@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
 	import LoadStatus from '$lib/components/report/LoadStatus.svelte';
+	import MultiSelectDropdown from '$lib/components/report/MultiSelectDropdown.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
@@ -53,7 +54,7 @@
 	let loading = false;
 	let error: string | null = null;
 	let progressText: string | null = null;
-	let selectedEmployer = '';
+	let selectedEmployers: string[] = [];
 	let selectedMonthLabel = '';
 
 	let activeJobId = '';
@@ -85,8 +86,9 @@
 	}
 
 	function filteredRows(): BillingRow[] {
-		if (!selectedEmployer) return loadedRows;
-		return loadedRows.filter((row) => row.employer === selectedEmployer);
+		if (selectedEmployers.length === 0) return loadedRows;
+		const selected = new Set(selectedEmployers);
+		return loadedRows.filter((row) => Boolean(row.employer) && selected.has(row.employer as string));
 	}
 
 	function mapTopKpis(rows: BillingRow[]): KpiItem[] {
@@ -168,7 +170,7 @@
 	}
 
 	function resetFilters(): void {
-		selectedEmployer = '';
+		selectedEmployers = [];
 	}
 
 	function isValidMonthLabel(value: string): boolean {
@@ -236,7 +238,7 @@
 	}
 
 	$: if (loadedSummary) {
-		selectedEmployer;
+		selectedEmployers;
 		recomputeDisplay();
 	}
 
@@ -258,33 +260,28 @@
 	<Card.Root>
 		<Card.Header class="pb-3">
 			<Card.Title class="text-base">Billing Filters</Card.Title>
-			<Card.Description>Restore legacy billing month and employer filters.</Card.Description>
 		</Card.Header>
 		<Card.Content class="space-y-4">
-			<div class="grid gap-3 md:grid-cols-3">
+			<div class="grid gap-3 md:grid-cols-2">
 				<div class="space-y-1">
 					<label class="text-xs font-medium text-muted-foreground" for="monthYearLabel">Billing Month</label>
 					<Input id="monthYearLabel" type="month" bind:value={selectedMonthLabel} />
 				</div>
 				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="employerFilter">Employer</label>
-					<select
-						id="employerFilter"
-						class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-						bind:value={selectedEmployer}
-					>
-						<option value="">All employers</option>
-						{#each uniqueEmployers as employer}
-							<option value={employer}>{employer}</option>
-						{/each}
-					</select>
+					<p class="text-xs font-medium text-muted-foreground">Employer</p>
+					<MultiSelectDropdown
+						placeholder="All employers"
+						options={uniqueEmployers.map((employer) => ({ value: employer, label: employer }))}
+						bind:selected={selectedEmployers}
+					/>
 				</div>
-				<div class="flex items-end gap-2">
-					<Button class="w-full" onclick={loadBilling} disabled={loading}>
-						{loading ? 'Loading...' : 'Run'}
-					</Button>
-					<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset</Button>
-				</div>
+			</div>
+
+			<div class="flex items-center gap-2">
+				<Button onclick={loadBilling} disabled={loading}>
+					{loading ? 'Loading...' : 'Run'}
+				</Button>
+				<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset</Button>
 			</div>
 
 			<LoadStatus {loading} {error} {progressText} />

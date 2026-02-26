@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
 	import LoadStatus from '$lib/components/report/LoadStatus.svelte';
+	import MultiSelectDropdown from '$lib/components/report/MultiSelectDropdown.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
@@ -63,8 +64,8 @@
 	let progressText: string | null = null;
 
 	let selectedLookbackDays = String(DEFAULT_LOOKBACK_DAYS);
-	let selectedCoachId = '';
-	let selectedClient = '';
+	let selectedCoachIds: string[] = [];
+	let selectedClients: string[] = [];
 	let rangeStart = '';
 	let rangeEnd = '';
 	let uniqueCoaches: Array<{ id: string; name: string }> = [];
@@ -162,12 +163,14 @@
 	function filteredRows(): NewParticipantsRow[] {
 		let rows = loadedRows;
 
-		if (selectedCoachId) {
-			rows = rows.filter((row) => row.coachIds.includes(selectedCoachId));
+		if (selectedCoachIds.length > 0) {
+			const selected = new Set(selectedCoachIds);
+			rows = rows.filter((row) => row.coachIds.some((id) => selected.has(id)));
 		}
 
-		if (selectedClient) {
-			rows = rows.filter((row) => row.client === selectedClient);
+		if (selectedClients.length > 0) {
+			const selected = new Set(selectedClients);
+			rows = rows.filter((row) => Boolean(row.client) && selected.has(row.client as string));
 		}
 
 		if (rangeStart) {
@@ -202,8 +205,8 @@
 	}
 
 	function resetFilters(): void {
-		selectedCoachId = '';
-		selectedClient = '';
+		selectedCoachIds = [];
+		selectedClients = [];
 		rangeStart = '';
 		rangeEnd = '';
 	}
@@ -274,8 +277,8 @@
 	}
 
 	$: if (loadedSummary) {
-		selectedCoachId;
-		selectedClient;
+		selectedCoachIds;
+		selectedClients;
 		rangeStart;
 		rangeEnd;
 		recomputeDisplay();
@@ -298,7 +301,6 @@
 	<Card.Root>
 		<Card.Header class="pb-3">
 			<Card.Title class="text-base">Enrolled Filters</Card.Title>
-			<Card.Description>Restore legacy enrolled participants filters.</Card.Description>
 		</Card.Header>
 		<Card.Content class="space-y-4">
 			<div class="grid gap-3 md:grid-cols-4">
@@ -307,36 +309,20 @@
 					<Input id="lookbackDays" type="number" min="1" max={MAX_LOOKBACK_DAYS} bind:value={selectedLookbackDays} />
 				</div>
 				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="coachFilter">Coach</label>
-					<select
-						id="coachFilter"
-						class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-						bind:value={selectedCoachId}
-					>
-						<option value="">All coaches</option>
-						{#each uniqueCoaches as coach}
-							<option value={coach.id}>{coach.name}</option>
-						{/each}
-					</select>
+					<p class="text-xs font-medium text-muted-foreground">Coach</p>
+					<MultiSelectDropdown
+						placeholder="All coaches"
+						options={uniqueCoaches.map((coach) => ({ value: coach.id, label: coach.name }))}
+						bind:selected={selectedCoachIds}
+					/>
 				</div>
 				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="clientFilter">Client</label>
-					<select
-						id="clientFilter"
-						class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-						bind:value={selectedClient}
-					>
-						<option value="">All clients</option>
-						{#each uniqueClients as client}
-							<option value={client}>{client}</option>
-						{/each}
-					</select>
-				</div>
-				<div class="flex items-end gap-2">
-					<Button class="w-full" onclick={loadNewParticipants} disabled={loading}>
-						{loading ? 'Loading...' : 'Run'}
-					</Button>
-					<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset</Button>
+					<p class="text-xs font-medium text-muted-foreground">Client</p>
+					<MultiSelectDropdown
+						placeholder="All clients"
+						options={uniqueClients.map((client) => ({ value: client, label: client }))}
+						bind:selected={selectedClients}
+					/>
 				</div>
 			</div>
 
@@ -349,6 +335,13 @@
 					<label class="text-xs font-medium text-muted-foreground" for="rangeEnd">Enrolled End</label>
 					<Input id="rangeEnd" type="date" bind:value={rangeEnd} />
 				</div>
+			</div>
+
+			<div class="flex items-center gap-2">
+				<Button onclick={loadNewParticipants} disabled={loading}>
+					{loading ? 'Loading...' : 'Run'}
+				</Button>
+				<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset</Button>
 			</div>
 
 			<LoadStatus {loading} {error} {progressText} />
