@@ -12,8 +12,15 @@ type PagedResponseLike = {
 };
 
 function normalizeFiniteNumber(value: unknown): number | null {
-	const num = Number(value);
-	return Number.isFinite(num) ? num : null;
+	if (value === null || value === undefined) return null;
+	if (typeof value === 'boolean') return null;
+	if (typeof value === 'string' && value.trim().length === 0) return null;
+
+	const num = typeof value === 'number' ? value : Number(value);
+	if (!Number.isFinite(num)) return null;
+	if (num < 0) return null;
+
+	return Math.floor(num);
 }
 
 export async function runJobUntilComplete<TProgress extends JobProgressLike>(opts: {
