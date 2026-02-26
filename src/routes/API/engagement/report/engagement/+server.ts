@@ -4,6 +4,7 @@ import {
   extractIntercomContacts,
   intercomPaginate
 } from '$lib/server/intercom';
+import { createReportLogger } from '$lib/server/report-logger';
 import {
   INTERCOM_ATTR_DOB,
   INTERCOM_ATTR_ELIGIBLE_PROGRAMS,
@@ -63,6 +64,7 @@ type IntercomContact = {
   email?: string | null;
   custom_attributes?: Record<string, any>;
 };
+const log = createReportLogger('engagement-report-export');
 
 // ----- Utility functions -----
 
@@ -250,14 +252,15 @@ async function searchContactsForExport(body: ExportRequestBody): Promise<Interco
     perPage,
     extractItems: extractIntercomContacts,
     onPage: ({ page, items, totalCount }) => {
-      const count = totalCount ?? 'unknown';
-      console.log(
-        `Contacts search page ${page}: got ${items} contacts (total_count=${count}).`
-      );
+      log.debug('contacts_page', {
+        page,
+        pageItems: items,
+        totalCount: totalCount ?? null
+      });
     }
   });
 
-  console.log(`Total contacts fetched for CSV export: ${contacts.length}`);
+  log.info('contacts_fetched', { count: contacts.length });
   return contacts;
 }
 
@@ -361,7 +364,7 @@ export const POST: RequestHandler = async ({ request }) => {
       );
     }
 
-    console.log('Starting CSV export with filters:', {
+    log.info('export_start', {
       ...body,
       outputPath: outPathAbs,
       returnMode: mode
@@ -376,7 +379,7 @@ export const POST: RequestHandler = async ({ request }) => {
       await fs.mkdir(dir, { recursive: true });
 
       await fs.writeFile(outPathAbs, csv, 'utf8');
-      console.log(`CSV export written to ${outPathAbs} (${rows.length} rows)`);
+      log.info('export_file_written', { outputPath: outPathAbs, rowsWritten: rows.length });
 
       const previewRows = rows.slice(0, 10);
 
@@ -419,7 +422,7 @@ export const POST: RequestHandler = async ({ request }) => {
       }
     });
   } catch (e: any) {
-    console.error('Intercom export-members-csv failed:', e?.message ?? e);
+    log.error('export_failed', { message: e?.message ?? String(e) });
     return new Response(
       JSON.stringify({
         error: 'Intercom export-members-csv failed',
