@@ -1,4 +1,4 @@
-import { INTERCOM_MAX_PER_PAGE, intercomRequest } from '$lib/server/intercom';
+import { INTERCOM_MAX_PER_PAGE, intercomRequest } from '$lib/server/intercom-provider';
 import {
 	INTERCOM_ATTR_CHANNEL,
 	INTERCOM_ATTR_EMPLOYER,

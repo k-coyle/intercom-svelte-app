@@ -1,7 +1,7 @@
 // src/routes/API/engagement/caseload/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import { intercomRequest as intercomApiRequest } from '$lib/server/intercom';
+import { intercomRequest as intercomApiRequest } from '$lib/server/intercom-provider';
 import {
   INTERCOM_ATTR_CHANNEL,
   INTERCOM_ATTR_EMPLOYER

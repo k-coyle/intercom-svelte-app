@@ -5,6 +5,7 @@
 
 	export let navItems: NavItem[] = [];
 	export let title = 'Engagement Analytics';
+	export let sandboxModeOffline = false;
 
 	let mobileNavOpen = false;
 </script>
@@ -16,7 +17,7 @@
 		</aside>
 
 		<div class="flex min-w-0 flex-1 flex-col">
-			<Topbar {title} on:menu={() => (mobileNavOpen = true)} />
+			<Topbar {title} {sandboxModeOffline} on:menu={() => (mobileNavOpen = true)} />
 
 			<main class="mx-auto w-full max-w-6xl space-y-4 px-4 py-6 lg:px-6">
 				<slot />

@@ -17,8 +17,39 @@
 	} from '$lib/components/ui/dropdown-menu';
 
 	export let title = 'Engagement Analytics';
+	export let sandboxModeOffline = false;
 
 	const dispatch = createEventDispatcher<{ menu: void }>();
+
+	let switchingSandboxMode = false;
+	let sandboxModeError: string | null = null;
+
+	async function setSandboxMode(enabled: boolean): Promise<void> {
+		if (switchingSandboxMode || sandboxModeOffline === enabled) return;
+
+		switchingSandboxMode = true;
+		sandboxModeError = null;
+
+		try {
+			const response = await fetch('/API/engagement/sandbox-mode', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ enabled })
+			});
+
+			if (!response.ok) {
+				const text = await response.text();
+				throw new Error(text || `HTTP ${response.status}`);
+			}
+
+			if (typeof window !== 'undefined') {
+				window.location.reload();
+			}
+		} catch (error: any) {
+			sandboxModeError = error?.message ?? 'Unable to update sandbox mode.';
+			switchingSandboxMode = false;
+		}
+	}
 </script>
 
 <header class="border-b bg-background">
@@ -41,9 +72,33 @@
 		</div>
 
 		<div class="ml-auto flex items-center gap-1">
-			<Button variant="ghost" size="icon">
-				<SettingsIcon class="size-4" />
-			</Button>
+			<DropdownMenu>
+				<DropdownMenuTrigger
+					class="inline-flex size-8 items-center justify-center rounded-md hover:bg-accent"
+					aria-label="Settings"
+				>
+					<SettingsIcon class="size-4" />
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end">
+					<DropdownMenuLabel>Settings</DropdownMenuLabel>
+					<DropdownMenuSeparator />
+					<DropdownMenuItem disabled={switchingSandboxMode || sandboxModeOffline} onclick={() => setSandboxMode(true)}>
+						Enable Sandbox Data
+					</DropdownMenuItem>
+					<DropdownMenuItem disabled={switchingSandboxMode || !sandboxModeOffline} onclick={() => setSandboxMode(false)}>
+						Use Live Data
+					</DropdownMenuItem>
+					<DropdownMenuSeparator />
+					<DropdownMenuLabel>
+						Mode: {sandboxModeOffline ? 'Sandbox' : 'Live'}
+					</DropdownMenuLabel>
+					{#if sandboxModeError}
+						<DropdownMenuLabel class="max-w-64 text-xs text-destructive">
+							{sandboxModeError}
+						</DropdownMenuLabel>
+					{/if}
+				</DropdownMenuContent>
+			</DropdownMenu>
 			<Button variant="ghost" size="icon">
 				<BellIcon class="size-4" />
 			</Button>

@@ -1,6 +1,10 @@
 // src/routes/API/engagement/billing/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
-import { fetchContactsByIds, intercomRequest, INTERCOM_MAX_PER_PAGE } from '$lib/server/intercom';
+import {
+	fetchContactsByIds,
+	intercomRequest,
+	INTERCOM_MAX_PER_PAGE
+} from '$lib/server/intercom-provider';
 import {
 	INTERCOM_ATTR_CHANNEL,
 	INTERCOM_ATTR_EMPLOYER,

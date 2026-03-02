@@ -4,7 +4,7 @@ import {
 	extractIntercomConversations,
 	intercomPaginate,
 	intercomRequest
-} from '$lib/server/intercom';
+} from '$lib/server/intercom-provider';
 import {
 	INTERCOM_ATTR_CHANNEL,
 	INTERCOM_ATTR_ENROLLED_DATE,
@@ -132,7 +132,15 @@ async function fetchQualifyingSessionTimestamps(
 	});
 
 	const timestamps: number[] = [];
+	const seenConversationIds = new Set<string>();
 	for (const conversation of conversations) {
+		const conversationId =
+			conversation?.id != null ? String(conversation.id) : '';
+		if (conversationId) {
+			if (seenConversationIds.has(conversationId)) continue;
+			seenConversationIds.add(conversationId);
+		}
+
 		if (!isQualifyingSession(conversation)) continue;
 
 		const createdAt = toNumber(conversation?.created_at);
