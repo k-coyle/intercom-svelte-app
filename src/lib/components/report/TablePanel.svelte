@@ -9,7 +9,30 @@
 	export let title: string;
 	export let columns: TableColumn[] = [];
 	export let rows: Record<string, any>[] = [];
-	export let footerText: string = 'Showing 1-50 of 120 entries';
+	export let footerText: string = 'No rows available.';
+	export let pageSize = 20;
+
+	let pageIndex = 0;
+
+	$: safePageSize = Math.max(1, Math.floor(pageSize));
+	$: totalRows = rows.length;
+	$: totalPages = totalRows > 0 ? Math.ceil(totalRows / safePageSize) : 1;
+	$: maxPageIndex = Math.max(0, totalPages - 1);
+	$: if (pageIndex > maxPageIndex) pageIndex = maxPageIndex;
+	$: if (pageIndex < 0) pageIndex = 0;
+	$: start = pageIndex * safePageSize;
+	$: endExclusive = Math.min(totalRows, start + safePageSize);
+	$: visibleRows = rows.slice(start, endExclusive);
+	$: computedFooterText =
+		totalRows > 0 ? `Showing ${start + 1}-${endExclusive} of ${totalRows} entries` : footerText;
+
+	function goPrevPage() {
+		pageIndex = Math.max(0, pageIndex - 1);
+	}
+
+	function goNextPage() {
+		pageIndex = Math.min(maxPageIndex, pageIndex + 1);
+	}
 </script>
 
 <Card.Root>
@@ -31,8 +54,8 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#if rows.length}
-						{#each rows as row}
+					{#if visibleRows.length}
+						{#each visibleRows as row}
 							<tr class="border-b text-sm transition-colors hover:bg-muted/40">
 								{#each columns as column}
 									<td class={`px-2 py-2 ${column.className ?? ''}`}>
@@ -61,12 +84,12 @@
 		</div>
 
 		<div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-			<span>{footerText}</span>
+			<span>{computedFooterText}</span>
 			<div class="flex items-center gap-1">
-				<Button size="icon" variant="ghost">
+				<Button size="icon" variant="ghost" disabled={pageIndex === 0} onclick={goPrevPage}>
 					<ChevronLeftIcon class="size-4" />
 				</Button>
-				<Button size="icon" variant="ghost">
+				<Button size="icon" variant="ghost" disabled={pageIndex >= maxPageIndex} onclick={goNextPage}>
 					<ChevronRightIcon class="size-4" />
 				</Button>
 			</div>

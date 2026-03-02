@@ -135,6 +135,14 @@ export const engagementReportConfig: Record<ReportKey, EngagementReportLayout> =
 				points: [38, 39, 40, 39, 38, 37, 36, 36, 35, 34, 34, 33]
 			},
 			{
+				label: '29-56 days since session',
+				value: '266',
+				deltaLabel: '+4',
+				deltaPct: '+1.5%',
+				trend: 'up',
+				points: [24, 24, 23, 23, 22, 22, 21, 21, 22, 22, 23, 23]
+			},
+			{
 				label: '> 56 days since session',
 				value: '187',
 				deltaLabel: '+12',

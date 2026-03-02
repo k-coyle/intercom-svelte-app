@@ -18,7 +18,6 @@
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
 	const DEFAULT_LOOKBACK_DAYS = DEFAULT_NEW_PARTICIPANTS_LOOKBACK_DAYS;
-	const TABLE_LIMIT = 50;
 
 	type NewParticipantsSummaryResponse = {
 		generatedAt: string;
@@ -117,7 +116,7 @@
 			{ key: 'coaches', header: 'Coaches' }
 		];
 
-		const rows = data.slice(0, TABLE_LIMIT).map((item) => ({
+		const rows = data.map((item) => ({
 			member: item.memberName ?? item.memberEmail ?? item.memberId,
 			client: item.client ?? '-',
 			enrolledDate: formatUnixDate(item.participantAt),
@@ -129,12 +128,11 @@
 			coaches: item.coachNames?.join(', ') || '-'
 		}));
 
-		const shown = rows.length;
 		return {
 			title: 'Recent Enrollments',
 			columns,
 			rows,
-			footerText: `Showing 1-${shown} of ${data.length} entries`
+			footerText: `Showing 1-${rows.length} of ${rows.length} entries`
 		};
 	}
 

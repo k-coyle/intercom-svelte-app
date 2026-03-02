@@ -33,6 +33,7 @@
 		points: []
 	}));
 	$: effectiveTopKpis = topKpisOverride ?? (disableFallback ? blankKpis : config.topKpis);
+	$: showKpiDeltas = reportKey === 'overview' || reportKey === 'billing';
 	$: bottomLeftLines = bottomLeftLinesOverride ?? (disableFallback ? [] : config.bottomLeftPanel.lines);
 	$: tableConfig = {
 		title: bottomRightTableOverride?.title ?? config.bottomRightTable.title,
@@ -47,7 +48,7 @@
 <div class="space-y-4">
 	<PageHeader title={config.pageTitle} subtitle={config.pageSubtitle} />
 
-	<KpiRow items={effectiveTopKpis} />
+	<KpiRow items={effectiveTopKpis} showDelta={showKpiDeltas} />
 
 	<div class="grid gap-4 lg:grid-cols-2">
 		<PanelCard title={config.midLeftPanel.title}>
@@ -90,11 +91,14 @@
 			</ul>
 		</PanelCard>
 
-		<TablePanel
-			title={tableConfig.title}
-			columns={tableConfig.columns}
-			rows={tableConfig.rows}
-			footerText={tableConfig.footerText ?? 'Showing 1-50 of 120 entries'}
-		/>
+		{#if reportKey !== 'overview'}
+			<TablePanel
+				title={tableConfig.title}
+				columns={tableConfig.columns}
+				rows={tableConfig.rows}
+				footerText={tableConfig.footerText ?? 'No rows available.'}
+				pageSize={20}
+			/>
+		{/if}
 	</div>
 </div>

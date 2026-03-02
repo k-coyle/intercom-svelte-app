@@ -20,7 +20,6 @@
 
 	const DEFAULT_LOOKBACK_DAYS = DEFAULT_CASELOAD_LOOKBACK_DAYS;
 	const ALL_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
-	const TABLE_LIMIT = 50;
 
 	type SessionChannel = (typeof ALL_CHANNELS)[number];
 
@@ -116,12 +115,14 @@
 	function mapTopKpis(filteredMembers: CaseloadMemberRow[]): KpiItem[] {
 		const bucket1 = filteredMembers.filter((m) => m.buckets.bucket_1).length;
 		const bucket2 = filteredMembers.filter((m) => m.buckets.bucket_2).length;
+		const bucket3 = filteredMembers.filter((m) => m.buckets.bucket_3).length;
 		const bucket4 = filteredMembers.filter((m) => m.buckets.bucket_4).length;
 		const total = filteredMembers.length;
 
 		return [
 			buildShareKpi('Active in <= 7 days', bucket1, total, [bucket1, bucket1, bucket1]),
 			buildShareKpi('8-28 days since session', bucket2, total, [bucket2, bucket2, bucket2]),
+			buildShareKpi('29-56 days since session', bucket3, total, [bucket3, bucket3, bucket3]),
 			buildShareKpi('> 56 days since session', bucket4, total, [bucket4, bucket4, bucket4])
 		];
 	}
@@ -142,7 +143,7 @@
 			{ key: 'bucket', header: 'Bucket' }
 		];
 
-		const rows = members.slice(0, TABLE_LIMIT).map((item) => ({
+		const rows = members.map((item) => ({
 			member: item.memberName ?? item.memberEmail ?? item.memberId,
 			client: item.client ?? '-',
 			coaches: item.coachNames?.join(', ') || '-',
@@ -154,14 +155,11 @@
 			bucket: getBucketLabel(item.buckets)
 		}));
 
-		const shownCount = rows.length;
-		const totalCount = members.length;
-
 		return {
 			title: 'Caseload Member Detail',
 			columns,
 			rows,
-			footerText: `Showing 1-${shownCount} of ${totalCount} entries`
+			footerText: `Showing 1-${rows.length} of ${rows.length} entries`
 		};
 	}
 

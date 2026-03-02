@@ -19,7 +19,6 @@
 
 	const DEFAULT_LOOKBACK_DAYS = DEFAULT_SESSIONS_LOOKBACK_DAYS;
 	const ALL_CHANNELS = ['Phone', 'Video Conference', 'Email', 'Chat'] as const;
-	const TABLE_LIMIT = 50;
 	const SECONDS_PER_DAY = 24 * 60 * 60;
 
 	type SessionChannel = (typeof ALL_CHANNELS)[number];
@@ -144,7 +143,7 @@
 		];
 
 		const sorted = [...sessions].sort((a, b) => b.time - a.time);
-		const rows = sorted.slice(0, TABLE_LIMIT).map((s) => {
+		const rows = sorted.map((s) => {
 			const daysSince =
 				s.daysSince != null && Number.isFinite(s.daysSince)
 					? s.daysSince
@@ -164,7 +163,7 @@
 			title: 'Session Detail',
 			columns,
 			rows,
-			footerText: `Showing 1-${rows.length} of ${sorted.length} entries`
+			footerText: `Showing 1-${rows.length} of ${rows.length} entries`
 		};
 	}
 
