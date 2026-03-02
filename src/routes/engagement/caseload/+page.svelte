@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
 	import LoadStatus from '$lib/components/report/LoadStatus.svelte';
+	import ChannelFrequencyHeatmap from '$lib/components/report/ChannelFrequencyHeatmap.svelte';
 	import MultiSelectDropdown from '$lib/components/report/MultiSelectDropdown.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Input } from '$lib/components/ui/input';
@@ -60,8 +61,8 @@
 		buckets: CaseloadMemberBuckets;
 	};
 
-	let bottomLeftLinesOverride: string[] | null = null;
 	let topKpisOverride: KpiItem[] | null = null;
+	let pageMetaLinesOverride: string[] | null = null;
 	let bottomRightTableOverride: {
 		title?: string;
 		columns?: TableColumn[];
@@ -71,6 +72,14 @@
 
 	let reportSummary: CaseloadSummaryResponse | null = null;
 	let loadedMembers: CaseloadMemberRow[] = [];
+	let loadedSessions: Array<{
+		memberId: string;
+		client: string | null;
+		coachId: string | null;
+		channel: SessionChannel;
+		time: number | string;
+	}> = [];
+	let heatmapRows: Array<{ channel: SessionChannel; time: number }> = [];
 
 	let selectedLookbackDays = String(DEFAULT_LOOKBACK_DAYS);
 	let selectedCoachIds: string[] = [];
@@ -85,6 +94,28 @@
 
 	let activeJobId = '';
 	let controller: AbortController | null = null;
+	const SECONDS_PER_DAY = 24 * 60 * 60;
+
+	function coerceUnixSeconds(raw: unknown): number | null {
+		if (raw == null) return null;
+
+		const numeric = Number(raw);
+		if (Number.isFinite(numeric)) {
+			let unix = numeric;
+			// Treat very large values as milliseconds.
+			if (unix > 1_000_000_000_000) unix = unix / 1000;
+			if (unix > 0) return Math.floor(unix);
+		}
+
+		if (typeof raw === 'string') {
+			const parsedMs = Date.parse(raw);
+			if (Number.isFinite(parsedMs) && parsedMs > 0) {
+				return Math.floor(parsedMs / 1000);
+			}
+		}
+
+		return null;
+	}
 
 	function getBucketLabel(buckets: CaseloadMemberBuckets): string {
 		if (buckets.bucket_1) return '<= 7d';
@@ -94,21 +125,11 @@
 		return '-';
 	}
 
-	function mapBottomLeft(summary: CaseloadSummaryResponse, filteredMembers: CaseloadMemberRow[]): string[] {
-		const bucket_1 = filteredMembers.filter((m) => m.buckets.bucket_1).length;
-		const bucket_2 = filteredMembers.filter((m) => m.buckets.bucket_2).length;
-		const bucket_3 = filteredMembers.filter((m) => m.buckets.bucket_3).length;
-		const bucket_4 = filteredMembers.filter((m) => m.buckets.bucket_4).length;
-
+	function mapPageMeta(summary: CaseloadSummaryResponse, filteredMembers: CaseloadMemberRow[]): string[] {
 		return [
-			`Lookback window: last ${summary.lookbackDays} days`,
 			`Generated at: ${formatIsoDate(summary.generatedAt)}`,
 			`Filtered members: ${filteredMembers.length} of ${loadedMembers.length}`,
-			`Qualifying sessions: ${summary.counts?.sessions ?? 0}`,
-			`Bucket 1 (<= 7d): ${bucket_1}`,
-			`Bucket 2 (8-28d): ${bucket_2}`,
-			`Bucket 3 (29-56d): ${bucket_3}`,
-			`Bucket 4 (> 56d): ${bucket_4}`
+			`Lookback window: last ${summary.lookbackDays} days`
 		];
 	}
 
@@ -208,17 +229,66 @@
 		return [...members].sort((a, b) => b.lastSessionAt - a.lastSessionAt);
 	}
 
+	function filteredSessionRows(): Array<{ channel: SessionChannel; time: number }> {
+		let sessions = loadedSessions;
+
+		if (selectedCoachIds.length > 0) {
+			const selected = new Set(selectedCoachIds);
+			sessions = sessions.filter((s) => Boolean(s.coachId) && selected.has(s.coachId as string));
+		}
+
+		if (selectedClients.length > 0) {
+			const selected = new Set(selectedClients);
+			sessions = sessions.filter((s) => Boolean(s.client) && selected.has(s.client as string));
+		}
+
+		if (selectedChannelValues.length !== ALL_CHANNELS.length) {
+			const selected = new Set(selectedChannelValues);
+			sessions = sessions.filter((s) => selected.has(s.channel));
+		}
+
+		const parsedLookback = Number(selectedLookbackDays);
+		if (Number.isFinite(parsedLookback) && parsedLookback > 0) {
+			const nowUnix = Math.floor(Date.now() / 1000);
+			const sinceUnix = nowUnix - parsedLookback * SECONDS_PER_DAY;
+			sessions = sessions.filter((s) => {
+				const parsedTime = coerceUnixSeconds(s.time);
+				return parsedTime != null && parsedTime >= sinceUnix;
+			});
+		}
+
+		return sessions
+			.map((session) => ({ channel: session.channel, time: coerceUnixSeconds(session.time) }))
+			.filter((session): session is { channel: SessionChannel; time: number } => session.time != null)
+			.filter((session) => Number.isFinite(session.time));
+	}
+
+	function heatmapRowsFromCurrentFilters(): Array<{ channel: SessionChannel; time: number }> {
+		const sessionRows = filteredSessionRows();
+		if (sessionRows.length > 0) return sessionRows;
+
+		// Fallback to the same member dataset shown in the detail table.
+		return filteredMembers()
+			.map((member) => ({
+				channel: 'Phone' as SessionChannel,
+				time: Number(member.lastSessionAt)
+			}))
+			.filter((row) => Number.isFinite(row.time) && row.time > 0);
+	}
+
 	function recomputeDisplay(): void {
 		if (!reportSummary) {
 			topKpisOverride = null;
-			bottomLeftLinesOverride = null;
+			pageMetaLinesOverride = null;
+			heatmapRows = [];
 			bottomRightTableOverride = null;
 			return;
 		}
 
 		const members = filteredMembers();
 		topKpisOverride = mapTopKpis(members);
-		bottomLeftLinesOverride = mapBottomLeft(reportSummary, members);
+		pageMetaLinesOverride = mapPageMeta(reportSummary, members);
+		heatmapRows = heatmapRowsFromCurrentFilters();
 		bottomRightTableOverride = mapTable(members);
 	}
 
@@ -254,7 +324,7 @@
 			});
 			jobIdForCleanup = jobId;
 
-			const [summary, members] = await Promise.all([
+			const [summary, members, sessions] = await Promise.all([
 				fetchCaseloadViewPage<CaseloadSummaryResponse>(
 					jobId,
 					'summary',
@@ -270,19 +340,34 @@
 					onPage: ({ loaded, total }) => {
 						progressText = `Loading member rows for filters ${loaded}${total != null ? ` / ${total}` : ''}...`;
 					}
+				}),
+				fetchAllCaseloadViewItems<{
+					memberId: string;
+					client: string | null;
+					coachId: string | null;
+					channel: SessionChannel;
+					time: number | string;
+				}>({
+					jobId,
+					view: 'sessions',
+					limit: 5000,
+					signal: controller.signal
 				})
 			]);
 
 			reportSummary = summary;
 			loadedMembers = members;
+			loadedSessions = sessions;
 			buildFilterOptions();
 			recomputeDisplay();
 		} catch (e: any) {
 			error = e?.message ?? 'Unable to load caseload report.';
 			reportSummary = null;
 			loadedMembers = [];
+			loadedSessions = [];
 			topKpisOverride = null;
-			bottomLeftLinesOverride = null;
+			pageMetaLinesOverride = null;
+			heatmapRows = [];
 			bottomRightTableOverride = null;
 		} finally {
 			loading = false;
@@ -366,8 +451,14 @@
 	<ReportCanvas
 		reportKey="caseload"
 		disableFallback={true}
+		hideMidRightPanel={true}
+		hideBottomLeftPanel={true}
 		{topKpisOverride}
-		{bottomLeftLinesOverride}
+		{pageMetaLinesOverride}
 		{bottomRightTableOverride}
-	/>
+	>
+		<svelte:fragment slot="midLeft">
+			<ChannelFrequencyHeatmap sessions={heatmapRows} channelOrder={[...ALL_CHANNELS]} />
+		</svelte:fragment>
+	</ReportCanvas>
 </div>

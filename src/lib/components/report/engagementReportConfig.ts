@@ -296,7 +296,7 @@ export const engagementReportConfig: Record<ReportKey, EngagementReportLayout> =
 			}
 		],
 		midLeftPanel: {
-			title: 'Follow-up Summary',
+			title: 'Daily Registration Activity',
 			kind: 'summary',
 			lines: [
 				'Most enrolled members receive a session within 14 days.',

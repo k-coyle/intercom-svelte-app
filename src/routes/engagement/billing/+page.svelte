@@ -37,7 +37,7 @@
 	};
 
 	let topKpisOverride: KpiItem[] | null = null;
-	let bottomLeftLinesOverride: string[] | null = null;
+	let pageMetaLinesOverride: string[] | null = null;
 	let bottomRightTableOverride: {
 		title?: string;
 		columns?: TableColumn[];
@@ -141,7 +141,7 @@
 		];
 	}
 
-	function mapBottomLeft(summary: BillingSummaryResponse, rows: BillingRow[]): string[] {
+	function mapPageMeta(summary: BillingSummaryResponse, rows: BillingRow[]): string[] {
 		const total = rows.length;
 		const newParticipants = rows.filter((row) => row.isNewParticipant).length;
 		const engaged = rows.filter((row) => row.engagedDuringMonth).length;
@@ -152,8 +152,7 @@
 			`Generated at: ${formatIsoDate(summary.generatedAt)}`,
 			`Filtered billable members: ${total} of ${loadedRows.length}`,
 			`New participants: ${newParticipants}`,
-			`Engaged participants: ${engaged}`,
-			'Rule: billable cohort = new participants UNION engaged participants for selected month.'
+			`Engaged participants: ${engaged}`
 		];
 	}
 
@@ -196,7 +195,7 @@
 	function recomputeDisplay(): void {
 		if (!loadedSummary) {
 			topKpisOverride = null;
-			bottomLeftLinesOverride = null;
+			pageMetaLinesOverride = null;
 			bottomRightTableOverride = null;
 			return;
 		}
@@ -204,7 +203,7 @@
 		const rows = filteredRows();
 		const priorRows = filteredPriorRows();
 		topKpisOverride = mapTopKpis(rows, priorRows);
-		bottomLeftLinesOverride = mapBottomLeft(loadedSummary, rows);
+		pageMetaLinesOverride = mapPageMeta(loadedSummary, rows);
 		bottomRightTableOverride = mapTable(rows);
 	}
 
@@ -286,7 +285,7 @@
 			loadedRows = [];
 			loadedPriorRows = [];
 			topKpisOverride = null;
-			bottomLeftLinesOverride = null;
+			pageMetaLinesOverride = null;
 			bottomRightTableOverride = null;
 		} finally {
 			loading = false;
@@ -357,8 +356,11 @@
 	<ReportCanvas
 		reportKey="billing"
 		disableFallback={true}
+		hideMidLeftPanel={true}
+		hideMidRightPanel={true}
+		hideBottomLeftPanel={true}
 		{topKpisOverride}
-		{bottomLeftLinesOverride}
+		{pageMetaLinesOverride}
 		{bottomRightTableOverride}
 	/>
 </div>

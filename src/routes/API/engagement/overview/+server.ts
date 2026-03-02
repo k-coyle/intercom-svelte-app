@@ -16,7 +16,10 @@ import {
 	computeElapsedEndUnixForMonth,
 	computeMonthComparisonWindow
 } from '$lib/server/report-time';
-import { isQualifyingCoachingSession } from '$lib/server/engagement-rules';
+import {
+	isQualifyingCoachingSession,
+	STANDARD_REPORT_SESSION_CHANNELS
+} from '$lib/server/engagement-rules';
 
 const SPARKLINE_POINTS = 8;
 
@@ -26,6 +29,28 @@ type KpiValue = {
 	deltaCount: number;
 	deltaPct: number | null;
 	sparkline: number[];
+};
+
+type QualifyingSessionRecord = {
+	createdAt: number;
+	memberId: string;
+	serviceCode: string;
+};
+
+type RegistrationConversionSnapshot = {
+	registeredCount: number;
+	withQualifyingSessionCount: number;
+	pct: number | null;
+};
+
+type ServiceCodeSessionRow = {
+	serviceCode: string;
+	count: number;
+	sharePct: number;
+};
+
+type ServiceCodeSessionRecord = {
+	serviceCode: string;
 };
 
 type MetricConfig = {
@@ -119,10 +144,31 @@ function isQualifyingSession(conversation: any): boolean {
 	);
 }
 
-async function fetchQualifyingSessionTimestamps(
+function normalizeText(value: unknown): string {
+	return String(value ?? '')
+		.trim()
+		.toLowerCase()
+		.replace(/[_-]+/g, ' ')
+		.replace(/\s+/g, ' ');
+}
+
+const NORMALIZED_SESSION_CHANNELS = new Set(
+	STANDARD_REPORT_SESSION_CHANNELS.map((channel) => normalizeText(channel))
+);
+
+function isStandardSessionChannel(channel: unknown): boolean {
+	return NORMALIZED_SESSION_CHANNELS.has(normalizeText(channel));
+}
+
+function normalizeServiceCode(value: unknown): string {
+	const normalized = String(value ?? '').trim();
+	return normalized.length > 0 ? normalized : 'Unspecified';
+}
+
+async function fetchQualifyingSessions(
 	startUnix: number,
 	endUnix: number
-): Promise<number[]> {
+): Promise<QualifyingSessionRecord[]> {
 	const conversations = await intercomPaginate<any>({
 		path: '/conversations/search',
 		body: {
@@ -131,11 +177,10 @@ async function fetchQualifyingSessionTimestamps(
 		extractItems: extractIntercomConversations
 	});
 
-	const timestamps: number[] = [];
+	const sessions: QualifyingSessionRecord[] = [];
 	const seenConversationIds = new Set<string>();
 	for (const conversation of conversations) {
-		const conversationId =
-			conversation?.id != null ? String(conversation.id) : '';
+		const conversationId = conversation?.id != null ? String(conversation.id) : '';
 		if (conversationId) {
 			if (seenConversationIds.has(conversationId)) continue;
 			seenConversationIds.add(conversationId);
@@ -147,11 +192,85 @@ async function fetchQualifyingSessionTimestamps(
 		if (createdAt == null) continue;
 		if (createdAt < startUnix || createdAt >= endUnix) continue;
 
-		timestamps.push(Math.floor(createdAt));
+		const memberId = String(
+			conversation?.contacts?.contacts?.[0]?.id ?? conversation?.contacts?.data?.[0]?.id ?? ''
+		);
+		if (!memberId) continue;
+
+		sessions.push({
+			createdAt: Math.floor(createdAt),
+			memberId,
+			serviceCode: normalizeServiceCode(
+				conversation?.custom_attributes?.[INTERCOM_ATTR_SERVICE_CODE]
+			)
+		});
 	}
 
-	timestamps.sort((a, b) => a - b);
-	return timestamps;
+	sessions.sort((a, b) => a.createdAt - b.createdAt);
+	return sessions;
+}
+
+async function fetchAllChannelSessionsByServiceCode(
+	startUnix: number,
+	endUnix: number
+): Promise<ServiceCodeSessionRecord[]> {
+	const conversations = await intercomPaginate<any>({
+		path: '/conversations/search',
+		body: {
+			query: buildQualifyingSessionsQuery(startUnix, endUnix)
+		},
+		extractItems: extractIntercomConversations
+	});
+
+	const sessions: ServiceCodeSessionRecord[] = [];
+	const seenConversationIds = new Set<string>();
+	for (const conversation of conversations) {
+		const conversationId = conversation?.id != null ? String(conversation.id) : '';
+		if (conversationId) {
+			if (seenConversationIds.has(conversationId)) continue;
+			seenConversationIds.add(conversationId);
+		}
+
+		if (String(conversation?.state ?? '').toLowerCase() !== 'closed') continue;
+
+		const createdAt = toNumber(conversation?.created_at);
+		if (createdAt == null) continue;
+		if (createdAt < startUnix || createdAt >= endUnix) continue;
+
+		const channel = conversation?.custom_attributes?.[INTERCOM_ATTR_CHANNEL];
+		if (!isStandardSessionChannel(channel)) continue;
+
+		sessions.push({
+			serviceCode: normalizeServiceCode(
+				conversation?.custom_attributes?.[INTERCOM_ATTR_SERVICE_CODE]
+			)
+		});
+	}
+
+	return sessions;
+}
+
+async function fetchContactIdsByDateRange(
+	attrKey: string,
+	startUnix: number,
+	endUnix: number
+): Promise<Set<string>> {
+	const contacts = await intercomPaginate<any>({
+		path: '/contacts/search',
+		body: {
+			query: buildContactDateRangeQuery(attrKey, startUnix, endUnix)
+		},
+		extractItems: extractIntercomContacts
+	});
+
+	const ids = new Set<string>();
+	for (const contact of contacts) {
+		if (contact?.role && String(contact.role) !== 'user') continue;
+		const id = String(contact?.id ?? '');
+		if (!id) continue;
+		ids.add(id);
+	}
+	return ids;
 }
 
 function countTimestampsBefore(sortedTimestamps: number[], endUnix: number): number {
@@ -231,6 +350,50 @@ function computeSessionMetric(
 	};
 }
 
+function computeRegistrationConversionSnapshot(
+	registeredIds: Set<string>,
+	sessions: QualifyingSessionRecord[]
+): RegistrationConversionSnapshot {
+	const memberIdsWithSessions = new Set<string>(sessions.map((session) => session.memberId));
+	let withQualifyingSessionCount = 0;
+	for (const registeredId of registeredIds) {
+		if (memberIdsWithSessions.has(registeredId)) withQualifyingSessionCount += 1;
+	}
+
+	const registeredCount = registeredIds.size;
+	const pct =
+		registeredCount === 0
+			? null
+			: Number(((withQualifyingSessionCount / registeredCount) * 100).toFixed(2));
+
+	return {
+		registeredCount,
+		withQualifyingSessionCount,
+		pct
+	};
+}
+
+function computeServiceCodeSessionRows(
+	sessions: ServiceCodeSessionRecord[]
+): ServiceCodeSessionRow[] {
+	const counts = new Map<string, number>();
+	for (const session of sessions) {
+		counts.set(session.serviceCode, (counts.get(session.serviceCode) ?? 0) + 1);
+	}
+
+	const total = sessions.length;
+	return [...counts.entries()]
+		.map(([serviceCode, count]) => ({
+			serviceCode,
+			count,
+			sharePct: total === 0 ? 0 : Number(((count / total) * 100).toFixed(2))
+		}))
+		.sort((a, b) => {
+			if (b.count !== a.count) return b.count - a.count;
+			return a.serviceCode.localeCompare(b.serviceCode);
+		});
+}
+
 export const GET: RequestHandler = async ({ url }) => {
 	try {
 		const monthYearLabelInput = url.searchParams.get('monthYearLabel');
@@ -256,17 +419,41 @@ export const GET: RequestHandler = async ({ url }) => {
 			}
 		];
 
-		const [values, currentSessionTimestamps, priorSessionTimestamps] = await Promise.all([
+		const [
+			values,
+			currentSessions,
+			priorSessions,
+			currentAllChannelSessions,
+			currentRegistrationIds,
+			priorRegistrationIds
+		] = await Promise.all([
 			Promise.all(metrics.map((metric) => computeMetric(metric, comparison))),
-			fetchQualifyingSessionTimestamps(
+			fetchQualifyingSessions(
 				comparison.current.month.monthStartUnix,
 				comparison.current.elapsedEndUnix
 			),
-			fetchQualifyingSessionTimestamps(
+			fetchQualifyingSessions(
+				comparison.prior.month.monthStartUnix,
+				comparison.prior.elapsedEndUnix
+			),
+			fetchAllChannelSessionsByServiceCode(
+				comparison.current.month.monthStartUnix,
+				comparison.current.elapsedEndUnix
+			),
+			fetchContactIdsByDateRange(
+				INTERCOM_ATTR_REGISTRATION_DATE,
+				comparison.current.month.monthStartUnix,
+				comparison.current.elapsedEndUnix
+			),
+			fetchContactIdsByDateRange(
+				INTERCOM_ATTR_REGISTRATION_DATE,
 				comparison.prior.month.monthStartUnix,
 				comparison.prior.elapsedEndUnix
 			)
 		]);
+
+		const currentSessionTimestamps = currentSessions.map((session) => session.createdAt);
+		const priorSessionTimestamps = priorSessions.map((session) => session.createdAt);
 
 		const byKey = Object.fromEntries(values.map((value, index) => [metrics[index].key, value]));
 		const qualifyingSessionsMtd = computeSessionMetric(
@@ -274,6 +461,23 @@ export const GET: RequestHandler = async ({ url }) => {
 			currentSessionTimestamps,
 			priorSessionTimestamps
 		);
+		const enrollmentSnapshot = {
+			newlyRegisteredWithQualifyingSessionMtd: {
+				current: computeRegistrationConversionSnapshot(
+					currentRegistrationIds,
+					currentSessions
+				),
+				prior: computeRegistrationConversionSnapshot(
+					priorRegistrationIds,
+					priorSessions
+				)
+			}
+		};
+		const caseloadTrends = {
+			sessionsByServiceCodeMtd: computeServiceCodeSessionRows(
+				currentAllChannelSessions
+			)
+		};
 
 		return new Response(
 			JSON.stringify({
@@ -293,7 +497,9 @@ export const GET: RequestHandler = async ({ url }) => {
 					newRegistrationsMtd: byKey.newRegistrationsMtd,
 					newEnrolleesMtd: byKey.newEnrolleesMtd,
 					qualifyingSessionsMtd
-				}
+				},
+				enrollmentSnapshot,
+				caseloadTrends
 			}),
 			{ headers: { 'Content-Type': 'application/json' } }
 		);

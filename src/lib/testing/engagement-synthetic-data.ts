@@ -76,6 +76,27 @@ type ExpectedInvariants = {
 		newRegistrationsMtd: { count: number; priorCount: number };
 		newEnrolleesMtd: { count: number; priorCount: number };
 		qualifyingSessionsMtd: { count: number; priorCount: number };
+		enrollmentSnapshot: {
+			newlyRegisteredWithQualifyingSessionMtd: {
+				current: {
+					registeredCount: number;
+					withQualifyingSessionCount: number;
+					pct: number | null;
+				};
+				prior: {
+					registeredCount: number;
+					withQualifyingSessionCount: number;
+					pct: number | null;
+				};
+			};
+		};
+		caseloadTrends: {
+			sessionsByServiceCodeMtd: Array<{
+				serviceCode: string;
+				count: number;
+				sharePct: number;
+			}>;
+		};
 	};
 };
 
@@ -470,9 +491,24 @@ function computeOverviewExpected(args: {
 		}).length;
 	}
 
-	function countQualifyingSessions(startUnix: number, endUnix: number): number {
+	function getContactIdsInRange(attrKey: string, startUnix: number, endUnix: number): Set<string> {
+		const ids = new Set<string>();
+		for (const contact of args.contacts) {
+			if (contact.role !== 'user') continue;
+			const raw = Number(contact.custom_attributes?.[attrKey] ?? NaN);
+			if (!Number.isFinite(raw)) continue;
+			if (raw < startUnix || raw >= endUnix) continue;
+			ids.add(contact.id);
+		}
+		return ids;
+	}
+
+	function collectQualifyingSessions(
+		startUnix: number,
+		endUnix: number
+	): Array<{ memberId: string; serviceCode: string }> {
 		const seenConversationIds = new Set<string>();
-		let count = 0;
+		const sessions: Array<{ memberId: string; serviceCode: string }> = [];
 
 		for (const conversation of args.conversations) {
 			const id = String(conversation.id ?? '');
@@ -489,11 +525,111 @@ function computeOverviewExpected(args: {
 			if (!Number.isFinite(createdAt)) continue;
 			if (createdAt < startUnix || createdAt >= endUnix) continue;
 
-			count += 1;
+			const memberId = String(conversation.contacts?.contacts?.[0]?.id ?? '');
+			if (!memberId) continue;
+
+			sessions.push({
+				memberId,
+				serviceCode: String(serviceCode ?? '').trim() || 'Unspecified'
+			});
 		}
 
-		return count;
+		return sessions;
 	}
+
+	function computeConversion(
+		registeredIds: Set<string>,
+		sessions: Array<{ memberId: string; serviceCode: string }>
+	) {
+		const withSession = new Set(sessions.map((session) => session.memberId));
+		let withQualifyingSessionCount = 0;
+		for (const id of registeredIds) {
+			if (withSession.has(id)) withQualifyingSessionCount += 1;
+		}
+
+		const registeredCount = registeredIds.size;
+		return {
+			registeredCount,
+			withQualifyingSessionCount,
+			pct:
+				registeredCount === 0
+					? null
+					: Number(((withQualifyingSessionCount / registeredCount) * 100).toFixed(2))
+		};
+	}
+
+	function computeServiceCodeRows(sessions: Array<{ serviceCode: string }>) {
+		const counts = new Map<string, number>();
+		for (const session of sessions) {
+			counts.set(session.serviceCode, (counts.get(session.serviceCode) ?? 0) + 1);
+		}
+
+		const total = sessions.length;
+		return [...counts.entries()]
+			.map(([serviceCode, count]) => ({
+				serviceCode,
+				count,
+				sharePct: total === 0 ? 0 : Number(((count / total) * 100).toFixed(2))
+			}))
+			.sort((a, b) => {
+				if (b.count !== a.count) return b.count - a.count;
+				return a.serviceCode.localeCompare(b.serviceCode);
+			});
+	}
+
+	function collectAllChannelSessionsForServiceCode(
+		startUnix: number,
+		endUnix: number
+	): Array<{ serviceCode: string }> {
+		const seenConversationIds = new Set<string>();
+		const allowedChannels = new Set<string>(STANDARD_REPORT_SESSION_CHANNELS);
+		const sessions: Array<{ serviceCode: string }> = [];
+
+		for (const conversation of args.conversations) {
+			const id = String(conversation.id ?? '');
+			if (id) {
+				if (seenConversationIds.has(id)) continue;
+				seenConversationIds.add(id);
+			}
+
+			if (conversation.state !== 'closed') continue;
+
+			const createdAt = Number(conversation.created_at ?? NaN);
+			if (!Number.isFinite(createdAt)) continue;
+			if (createdAt < startUnix || createdAt >= endUnix) continue;
+
+			const channel = String(conversation.custom_attributes?.[INTERCOM_ATTR_CHANNEL] ?? '');
+			if (!allowedChannels.has(channel)) continue;
+
+			const serviceCode = String(conversation.custom_attributes?.[INTERCOM_ATTR_SERVICE_CODE] ?? '').trim();
+			sessions.push({ serviceCode: serviceCode || 'Unspecified' });
+		}
+
+		return sessions;
+	}
+
+	const currentQualifyingSessions = collectQualifyingSessions(
+		comparison.current.month.monthStartUnix,
+		comparison.current.elapsedEndUnix
+	);
+	const priorQualifyingSessions = collectQualifyingSessions(
+		comparison.prior.month.monthStartUnix,
+		comparison.prior.elapsedEndUnix
+	);
+	const currentRegisteredIds = getContactIdsInRange(
+		INTERCOM_ATTR_REGISTRATION_DATE,
+		comparison.current.month.monthStartUnix,
+		comparison.current.elapsedEndUnix
+	);
+	const priorRegisteredIds = getContactIdsInRange(
+		INTERCOM_ATTR_REGISTRATION_DATE,
+		comparison.prior.month.monthStartUnix,
+		comparison.prior.elapsedEndUnix
+	);
+	const currentAllChannelSessions = collectAllChannelSessionsForServiceCode(
+		comparison.current.month.monthStartUnix,
+		comparison.current.elapsedEndUnix
+	);
 
 	return {
 		newRegistrationsMtd: {
@@ -521,14 +657,17 @@ function computeOverviewExpected(args: {
 			)
 		},
 		qualifyingSessionsMtd: {
-			count: countQualifyingSessions(
-				comparison.current.month.monthStartUnix,
-				comparison.current.elapsedEndUnix
-			),
-			priorCount: countQualifyingSessions(
-				comparison.prior.month.monthStartUnix,
-				comparison.prior.elapsedEndUnix
-			)
+			count: currentQualifyingSessions.length,
+			priorCount: priorQualifyingSessions.length
+		},
+		enrollmentSnapshot: {
+			newlyRegisteredWithQualifyingSessionMtd: {
+				current: computeConversion(currentRegisteredIds, currentQualifyingSessions),
+				prior: computeConversion(priorRegisteredIds, priorQualifyingSessions)
+			}
+		},
+		caseloadTrends: {
+			sessionsByServiceCodeMtd: computeServiceCodeRows(currentAllChannelSessions)
 		}
 	};
 }

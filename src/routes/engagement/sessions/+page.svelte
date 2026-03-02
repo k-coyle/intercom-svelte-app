@@ -36,7 +36,7 @@
 	};
 
 	let topKpisOverride: KpiItem[] | null = null;
-	let bottomLeftLinesOverride: string[] | null = null;
+	let pageMetaLinesOverride: string[] | null = null;
 	let bottomRightTableOverride: {
 		title?: string;
 		columns?: TableColumn[];
@@ -108,7 +108,7 @@
 		];
 	}
 
-	function mapBottomLeft(sessions: SessionDetailRow[], lookbackDays: number): string[] {
+	function mapPageMeta(sessions: SessionDetailRow[], lookbackDays: number): string[] {
 		const uniqueMembers = new Set(sessions.map((s) => s.memberId)).size;
 		const uniqueCoaches = new Set(
 			sessions.map((s) => s.coachId).filter((id): id is string => Boolean(id))
@@ -122,8 +122,7 @@
 			`Filtered sessions: ${sessions.length} of ${loadedSessions.length}`,
 			`Unique members: ${uniqueMembers}`,
 			`Unique coaches: ${uniqueCoaches}`,
-			`Unique clients: ${uniqueClients}`,
-			'Rows are session-level details (not member-level aggregates).'
+			`Unique clients: ${uniqueClients}`
 		];
 	}
 
@@ -218,7 +217,7 @@
 	function recomputeDisplay(): void {
 		if (!loadedSessions.length) {
 			topKpisOverride = null;
-			bottomLeftLinesOverride = null;
+			pageMetaLinesOverride = null;
 			bottomRightTableOverride = null;
 			return;
 		}
@@ -226,7 +225,7 @@
 		const sessions = filteredSessions();
 		const lookbackDays = Number(selectedLookbackDays) || DEFAULT_LOOKBACK_DAYS;
 		topKpisOverride = mapTopKpis(sessions, lookbackDays);
-		bottomLeftLinesOverride = mapBottomLeft(sessions, lookbackDays);
+		pageMetaLinesOverride = mapPageMeta(sessions, lookbackDays);
 		bottomRightTableOverride = mapTable(sessions);
 	}
 
@@ -279,7 +278,7 @@
 			error = e?.message ?? 'Unable to load sessions report.';
 			loadedSessions = [];
 			topKpisOverride = null;
-			bottomLeftLinesOverride = null;
+			pageMetaLinesOverride = null;
 			bottomRightTableOverride = null;
 		} finally {
 			loading = false;
@@ -363,8 +362,11 @@
 	<ReportCanvas
 		reportKey="sessions"
 		disableFallback={true}
+		hideMidLeftPanel={true}
+		hideMidRightPanel={true}
+		hideBottomLeftPanel={true}
 		{topKpisOverride}
-		{bottomLeftLinesOverride}
+		{pageMetaLinesOverride}
 		{bottomRightTableOverride}
 	/>
 </div>

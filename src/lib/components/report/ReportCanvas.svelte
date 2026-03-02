@@ -14,7 +14,12 @@
 
 	export let reportKey: ReportKey = 'overview';
 	export let disableFallback: boolean = false;
+	export let hideMidLeftPanel: boolean = false;
+	export let hideMidRightPanel: boolean = false;
+	export let hideBottomLeftPanel: boolean = false;
 	export let topKpisOverride: KpiItem[] | null = null;
+	export let pageSubtitleOverride: string | null = null;
+	export let pageMetaLinesOverride: string[] | null = null;
 	export let bottomLeftLinesOverride: string[] | null = null;
 	export let bottomRightTableOverride: {
 		title?: string;
@@ -34,6 +39,11 @@
 	}));
 	$: effectiveTopKpis = topKpisOverride ?? (disableFallback ? blankKpis : config.topKpis);
 	$: showKpiDeltas = reportKey === 'overview' || reportKey === 'billing';
+	$: showMidLeftPanel = !hideMidLeftPanel;
+	$: showMidRightPanel = !hideMidRightPanel;
+	$: showBottomLeftPanel = !hideBottomLeftPanel;
+	$: pageSubtitle = pageSubtitleOverride ?? config.pageSubtitle;
+	$: pageMetaLines = pageMetaLinesOverride ?? [];
 	$: bottomLeftLines = bottomLeftLinesOverride ?? (disableFallback ? [] : config.bottomLeftPanel.lines);
 	$: tableConfig = {
 		title: bottomRightTableOverride?.title ?? config.bottomRightTable.title,
@@ -46,50 +56,73 @@
 </script>
 
 <div class="space-y-4">
-	<PageHeader title={config.pageTitle} subtitle={config.pageSubtitle} />
+	<PageHeader title={config.pageTitle} subtitle={pageSubtitle} />
+	{#if pageMetaLines.length > 0}
+		<div class="rounded-md border bg-muted/15 px-3 py-2">
+			<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+				{#each pageMetaLines as line}
+					<p>{line}</p>
+				{/each}
+			</div>
+		</div>
+	{/if}
 
 	<KpiRow items={effectiveTopKpis} showDelta={showKpiDeltas} />
 
-	<div class="grid gap-4 lg:grid-cols-2">
-		<PanelCard title={config.midLeftPanel.title}>
-			{#if config.midLeftPanel.kind === 'trend'}
-				<TrendPanel
-					title={config.midLeftPanel.title}
-					timeframe={config.midLeftPanel.timeframe ?? 'Last 30 days'}
-				/>
-			{:else}
-				<ul class="space-y-2 text-sm text-muted-foreground">
-					{#each config.midLeftPanel.lines as line}
-						<li>{line}</li>
-					{/each}
-				</ul>
-			{/if}
-		</PanelCard>
+	<div class={`grid gap-4 ${showMidLeftPanel && showMidRightPanel ? 'lg:grid-cols-2' : 'grid-cols-1'}`}>
+		{#if showMidLeftPanel}
+			<PanelCard title={config.midLeftPanel.title}>
+				{#if $$slots.midLeft}
+					<slot name="midLeft" />
+				{:else if config.midLeftPanel.kind === 'trend'}
+					<TrendPanel
+						title={config.midLeftPanel.title}
+						timeframe={config.midLeftPanel.timeframe ?? 'Last 30 days'}
+					/>
+				{:else}
+					<ul class="space-y-2 text-sm text-muted-foreground">
+						{#each config.midLeftPanel.lines as line}
+							<li>{line}</li>
+						{/each}
+					</ul>
+				{/if}
+			</PanelCard>
+		{/if}
 
-		<PanelCard title={config.midRightPanel.title}>
-			{#if config.midRightPanel.kind === 'trend'}
-				<TrendPanel
-					title={config.midRightPanel.title}
-					timeframe={config.midRightPanel.timeframe ?? 'Last 30 days'}
-				/>
-			{:else}
-				<ul class="space-y-2 text-sm text-muted-foreground">
-					{#each config.midRightPanel.lines as line}
-						<li>{line}</li>
-					{/each}
-				</ul>
-			{/if}
-		</PanelCard>
+		{#if showMidRightPanel}
+			<PanelCard title={config.midRightPanel.title}>
+				{#if $$slots.midRight}
+					<slot name="midRight" />
+				{:else if config.midRightPanel.kind === 'trend'}
+					<TrendPanel
+						title={config.midRightPanel.title}
+						timeframe={config.midRightPanel.timeframe ?? 'Last 30 days'}
+					/>
+				{:else}
+					<ul class="space-y-2 text-sm text-muted-foreground">
+						{#each config.midRightPanel.lines as line}
+							<li>{line}</li>
+						{/each}
+					</ul>
+				{/if}
+			</PanelCard>
+		{/if}
 	</div>
 
 	<div class="space-y-4">
-		<PanelCard title={config.bottomLeftPanel.title}>
-			<ul class="space-y-2 text-sm text-muted-foreground">
-				{#each bottomLeftLines as line}
-					<li>{line}</li>
-				{/each}
-			</ul>
-		</PanelCard>
+		{#if showBottomLeftPanel}
+			<PanelCard title={config.bottomLeftPanel.title}>
+				{#if $$slots.bottomLeft}
+					<slot name="bottomLeft" />
+				{:else}
+					<ul class="space-y-2 text-sm text-muted-foreground">
+						{#each bottomLeftLines as line}
+							<li>{line}</li>
+						{/each}
+					</ul>
+				{/if}
+			</PanelCard>
+		{/if}
 
 		{#if reportKey !== 'overview'}
 			<TablePanel

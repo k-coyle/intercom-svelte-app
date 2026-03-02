@@ -99,6 +99,13 @@ describe('offline reporting endpoints', () => {
 		expect(payload.kpis.qualifyingSessionsMtd.priorCount).toBe(
 			testData.expected.overview.qualifyingSessionsMtd.priorCount
 		);
+		expect(payload.enrollmentSnapshot.newlyRegisteredWithQualifyingSessionMtd).toEqual(
+			testData.expected.overview.enrollmentSnapshot.newlyRegisteredWithQualifyingSessionMtd
+		);
+		expect(payload.caseloadTrends.sessionsByServiceCodeMtd).toEqual(
+			testData.expected.overview.caseloadTrends.sessionsByServiceCodeMtd
+		);
+		expect(payload.enrollmentSnapshot.newlyRegisteredWithQualifyingSessionMtd.current.pct).not.toBeNull();
 		expect(payload.kpis.newRegistrationsMtd.count).toBeGreaterThan(
 			payload.kpis.newRegistrationsMtd.priorCount
 		);

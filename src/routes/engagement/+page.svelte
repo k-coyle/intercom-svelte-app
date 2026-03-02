@@ -2,6 +2,9 @@
 	import { onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
 	import LoadStatus from '$lib/components/report/LoadStatus.svelte';
+	import DonutConversionChart from '$lib/components/report/DonutConversionChart.svelte';
+	import EndpointDocsPanel from '$lib/components/report/EndpointDocsPanel.svelte';
+	import ServiceCodeMtdBarChart from '$lib/components/report/ServiceCodeMtdBarChart.svelte';
 	import { fetchOverviewReport, type OverviewResponse } from '$lib/client/overview-report';
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
@@ -10,13 +13,88 @@
 	let error: string | null = null;
 	let progressText: string | null = null;
 	let topKpisOverride: KpiItem[] | null = null;
-	let bottomLeftLinesOverride: string[] | null = null;
+	let pageMetaLinesOverride: string[] | null = null;
 	let bottomRightTableOverride: {
 		title?: string;
 		columns?: TableColumn[];
 		rows?: Record<string, any>[];
 		footerText?: string;
 	} | null = null;
+
+	type OverviewEndpointSection = {
+		title: string;
+		items: Array<{
+			method: 'GET' | 'POST';
+			path: string;
+			summary: string;
+			arguments?: string[];
+			notes?: string;
+		}>;
+	};
+
+	const overviewEndpointSections: OverviewEndpointSection[] = [
+		{
+			title: 'Sync Jobs',
+			items: [
+				{
+					method: 'POST',
+					path: '/API/engagement/session-sync',
+					summary: 'Hydrates session-derived Intercom attributes (First Session, Last Session, Last Call).',
+					arguments: ['lookbackDays?', 'dryRun?', 'mode?'],
+					notes: 'mode: all | first-only | last-and-call-only'
+				},
+				{
+					method: 'POST',
+					path: '/API/engagement/engagement-sync',
+					summary: 'Reclassifies Engagement Status and Engagement Status Date from enrollment + recency rules.',
+					arguments: ['dryRun?', 'enrolledLookbackDays?', 'perPage?']
+				},
+				{
+					method: 'POST',
+					path: '/API/engagement/referral-sync',
+					summary: 'Applies referral-based program attributes for eligible member cohorts.',
+					arguments: ['dryRun?', 'referralValue?', 'eligibleProgramsValue?', 'perPage?']
+				}
+			]
+		},
+		{
+			title: 'Data Exports',
+			items: [
+				{
+					method: 'POST',
+					path: '/API/engagement/report/engagement',
+					summary: 'Exports participant-level engagement records with optional filtering.',
+					arguments: ['returnMode?', 'outputPath?', 'referral?', 'employer?', 'engagementStatus?'],
+					notes: 'Supports json, file, and streamed output modes.'
+				},
+				{
+					method: 'POST',
+					path: '/API/engagement/report/conversations',
+					summary: 'Exports conversation-level activity with channel/service-code flags and teammate metadata.',
+					arguments: ['lookbackDays?', 'returnMode?', 'outputPath?', 'perPage?', 'detailsConcurrency?']
+				}
+			]
+		},
+		{
+			title: 'Explore / Diagnostics',
+			items: [
+				{
+					method: 'GET',
+					path: '/API/explore/oncehub/sample-bookings?limit=25',
+					summary: 'Returns redacted OnceHub booking samples with field inventory and quick stats.',
+					arguments: ['limit?'],
+					notes: 'Outside dev, requires x-explore-token header.'
+				},
+				{
+					method: 'GET',
+					path: '/API/explore/postgres/tables?schema=public',
+					summary: 'Returns schema/table inventory for PostgreSQL debugging and source validation.',
+					arguments: ['schema?'],
+					notes: 'Requires EXPLORER_ENABLED=true.'
+				}
+			]
+		}
+	];
 
 	function signed(value: number): string {
 		return value >= 0 ? `+${value}` : String(value);
@@ -31,6 +109,15 @@
 	function formatPercent(value: number | null): string {
 		if (value == null) return 'n/a';
 		return `${signed(Number(value.toFixed(2)))}%`;
+	}
+
+	function formatShortDate(value: string): string {
+		const date = new Date(`${value}T00:00:00`);
+		if (Number.isNaN(date.getTime())) return value;
+		return new Intl.DateTimeFormat('en-US', {
+			month: 'short',
+			day: 'numeric'
+		}).format(date);
 	}
 
 	function mapOverviewKpis(data: OverviewResponse): KpiItem[] {
@@ -62,17 +149,10 @@
 		];
 	}
 
-	function mapOverviewBottomLeft(data: OverviewResponse): string[] {
+	function mapOverviewHeaderMeta(data: OverviewResponse): string[] {
 		return [
-			`Month: ${data.monthYearLabel}`,
-			`Reporting timezone: ${data.timeZone}`,
-			`Current elapsed window: ${data.window.monthStart} to ${data.window.elapsedEnd} (${data.window.elapsedDays} days)`,
-			`Prior elapsed window: ${data.window.priorMonthStart} to ${data.window.priorElapsedEnd} (${data.window.priorElapsedDays} days)`,
-			'POST /API/engagement/session-sync',
-			'POST /API/engagement/engagement-sync',
-			'POST /API/engagement/referral-sync',
-			'POST /API/engagement/report/engagement',
-			'First three endpoints update Intercom attributes; last endpoint produces a reporting stream.'
+			`Current elapsed MTD: ${formatShortDate(data.window.monthStart)} - ${formatShortDate(data.window.elapsedEnd)}`,
+			`Prior elapsed MTD: ${formatShortDate(data.window.priorMonthStart)} - ${formatShortDate(data.window.priorElapsedEnd)}`
 		];
 	}
 
@@ -120,13 +200,13 @@
 		try {
 			overview = await fetchOverviewReport();
 			topKpisOverride = mapOverviewKpis(overview);
-			bottomLeftLinesOverride = mapOverviewBottomLeft(overview);
+			pageMetaLinesOverride = mapOverviewHeaderMeta(overview);
 			bottomRightTableOverride = mapOverviewTable(overview);
 		} catch (e: any) {
 			// Keep mock config values if overview endpoint is unavailable.
 			error = e?.message ?? 'Unable to load overview report.';
 			topKpisOverride = null;
-			bottomLeftLinesOverride = null;
+			pageMetaLinesOverride = null;
 			bottomRightTableOverride = null;
 		} finally {
 			loading = false;
@@ -146,7 +226,44 @@
 		reportKey="overview"
 		disableFallback={true}
 		{topKpisOverride}
-		{bottomLeftLinesOverride}
+		{pageMetaLinesOverride}
 		{bottomRightTableOverride}
-	/>
+	>
+		<svelte:fragment slot="midLeft">
+			<div class="space-y-4">
+				<p class="text-sm text-muted-foreground">
+					MTD vs prior-MTD share of newly registered members who completed at least one qualifying
+					coaching session.
+				</p>
+				<div class="grid gap-3 sm:grid-cols-2">
+					<DonutConversionChart
+						title="Current MTD"
+						registeredCount={overview?.enrollmentSnapshot.newlyRegisteredWithQualifyingSessionMtd.current.registeredCount ?? 0}
+						withQualifyingSessionCount={overview?.enrollmentSnapshot.newlyRegisteredWithQualifyingSessionMtd.current.withQualifyingSessionCount ?? 0}
+						pct={overview?.enrollmentSnapshot.newlyRegisteredWithQualifyingSessionMtd.current.pct ?? null}
+						colorVar="var(--color-chart-1)"
+					/>
+					<DonutConversionChart
+						title="Prior MTD"
+						registeredCount={overview?.enrollmentSnapshot.newlyRegisteredWithQualifyingSessionMtd.prior.registeredCount ?? 0}
+						withQualifyingSessionCount={overview?.enrollmentSnapshot.newlyRegisteredWithQualifyingSessionMtd.prior.withQualifyingSessionCount ?? 0}
+						pct={overview?.enrollmentSnapshot.newlyRegisteredWithQualifyingSessionMtd.prior.pct ?? null}
+						colorVar="var(--color-chart-2)"
+					/>
+				</div>
+			</div>
+		</svelte:fragment>
+		<svelte:fragment slot="midRight">
+			<ServiceCodeMtdBarChart
+				rows={overview?.caseloadTrends.sessionsByServiceCodeMtd ?? []}
+				maxBars={6}
+			/>
+		</svelte:fragment>
+		<svelte:fragment slot="bottomLeft">
+			<EndpointDocsPanel
+				intro="Backend endpoints and background jobs that support the reporting suite."
+				sections={overviewEndpointSections}
+			/>
+		</svelte:fragment>
+	</ReportCanvas>
 </div>

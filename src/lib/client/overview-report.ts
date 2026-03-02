@@ -10,6 +10,18 @@ export type OverviewKpi = {
 	sparkline: number[];
 };
 
+export type RegistrationConversionSnapshot = {
+	registeredCount: number;
+	withQualifyingSessionCount: number;
+	pct: number | null;
+};
+
+export type ServiceCodeSessionRow = {
+	serviceCode: string;
+	count: number;
+	sharePct: number;
+};
+
 export type OverviewResponse = {
 	monthYearLabel: string;
 	timeZone: string;
@@ -27,6 +39,15 @@ export type OverviewResponse = {
 		newRegistrationsMtd: OverviewKpi;
 		newEnrolleesMtd: OverviewKpi;
 		qualifyingSessionsMtd: OverviewKpi;
+	};
+	enrollmentSnapshot: {
+		newlyRegisteredWithQualifyingSessionMtd: {
+			current: RegistrationConversionSnapshot;
+			prior: RegistrationConversionSnapshot;
+		};
+	};
+	caseloadTrends: {
+		sessionsByServiceCodeMtd: ServiceCodeSessionRow[];
 	};
 };
 

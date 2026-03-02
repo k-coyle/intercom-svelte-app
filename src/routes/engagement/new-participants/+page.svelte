@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import ReportCanvas from '$lib/components/report/ReportCanvas.svelte';
+	import ChannelFrequencyHeatmap from '$lib/components/report/ChannelFrequencyHeatmap.svelte';
 	import LoadStatus from '$lib/components/report/LoadStatus.svelte';
 	import MultiSelectDropdown from '$lib/components/report/MultiSelectDropdown.svelte';
 	import * as Card from '$lib/components/ui/card';
@@ -18,6 +19,7 @@
 	import type { KpiItem, TableColumn } from '$lib/components/report/engagementReportConfig';
 
 	const DEFAULT_LOOKBACK_DAYS = DEFAULT_NEW_PARTICIPANTS_LOOKBACK_DAYS;
+	const REGISTRATION_CHANNEL = 'New registrations';
 
 	type NewParticipantsSummaryResponse = {
 		generatedAt: string;
@@ -48,13 +50,14 @@
 	};
 
 	let topKpisOverride: KpiItem[] | null = null;
-	let bottomLeftLinesOverride: string[] | null = null;
+	let pageMetaLinesOverride: string[] | null = null;
 	let bottomRightTableOverride: {
 		title?: string;
 		columns?: TableColumn[];
 		rows?: Record<string, any>[];
 		footerText?: string;
 	} | null = null;
+	let heatmapRows: Array<{ channel: string; time: number }> = [];
 
 	let loadedSummary: NewParticipantsSummaryResponse | null = null;
 	let loadedRows: NewParticipantsRow[] = [];
@@ -86,19 +89,19 @@
 		];
 	}
 
-	function mapBottomLeft(summary: NewParticipantsSummaryResponse, rows: NewParticipantsRow[]): string[] {
-		const gt_14_to_21 = rows.filter((row) => row.buckets?.gt_14_to_21).length;
-		const gt_21_to_28 = rows.filter((row) => row.buckets?.gt_21_to_28).length;
-		const gt_28 = rows.filter((row) => row.buckets?.gt_28).length;
-
+	function mapPageMeta(summary: NewParticipantsSummaryResponse, rows: NewParticipantsRow[]): string[] {
 		return [
 			`Lookback window: last ${summary.lookbackDays} days`,
 			`Generated at: ${formatIsoDate(summary.generatedAt)}`,
-			`Filtered participants: ${rows.length} of ${loadedRows.length}`,
-			`15-21 days without session: ${gt_14_to_21}`,
-			`22-28 days without session: ${gt_21_to_28}`,
-			`> 28 days without session: ${gt_28}`
+			`Filtered participants: ${rows.length} of ${loadedRows.length}`
 		];
+	}
+
+	function mapHeatmapRows(rows: NewParticipantsRow[]): Array<{ channel: string; time: number }> {
+		return rows
+			.map((row) => row.participantAt)
+			.filter((participantAt): participantAt is number => participantAt != null && Number.isFinite(participantAt))
+			.map((participantAt) => ({ channel: REGISTRATION_CHANNEL, time: participantAt }));
 	}
 
 	function mapTable(data: NewParticipantsRow[]): {
@@ -191,14 +194,16 @@
 	function recomputeDisplay(): void {
 		if (!loadedSummary) {
 			topKpisOverride = null;
-			bottomLeftLinesOverride = null;
+			pageMetaLinesOverride = null;
+			heatmapRows = [];
 			bottomRightTableOverride = null;
 			return;
 		}
 
 		const rows = filteredRows();
 		topKpisOverride = mapTopKpis(rows);
-		bottomLeftLinesOverride = mapBottomLeft(loadedSummary, rows);
+		pageMetaLinesOverride = mapPageMeta(loadedSummary, rows);
+		heatmapRows = mapHeatmapRows(rows);
 		bottomRightTableOverride = mapTable(rows);
 	}
 
@@ -262,7 +267,8 @@
 			loadedSummary = null;
 			loadedRows = [];
 			topKpisOverride = null;
-			bottomLeftLinesOverride = null;
+			pageMetaLinesOverride = null;
+			heatmapRows = [];
 			bottomRightTableOverride = null;
 		} finally {
 			loading = false;
@@ -349,9 +355,22 @@
 	<ReportCanvas
 		reportKey="enrolled"
 		disableFallback={true}
+		hideMidRightPanel={true}
+		hideBottomLeftPanel={true}
 		{topKpisOverride}
-		{bottomLeftLinesOverride}
+		{pageMetaLinesOverride}
 		{bottomRightTableOverride}
-	/>
+	>
+		<svelte:fragment slot="midLeft">
+			<ChannelFrequencyHeatmap
+				sessions={heatmapRows}
+				channelOrder={[REGISTRATION_CHANNEL]}
+				showChannelFilters={false}
+				unitLabelSingular="registration"
+				unitLabelPlural="registrations"
+				noDataLabel="No new registrations found for the selected filters."
+			/>
+		</svelte:fragment>
+	</ReportCanvas>
 </div>
 
