@@ -40,20 +40,22 @@
 					method: 'POST',
 					path: '/API/engagement/session-sync',
 					summary: 'Hydrates session-derived Intercom attributes (First Session, Last Session, Last Call).',
-					arguments: ['lookbackDays?', 'dryRun?', 'mode?'],
-					notes: 'mode: all | first-only | last-and-call-only'
+					arguments: ['op=create|step|cancel|cleanup', 'jobId?', 'lookbackDays?', 'dryRun?', 'mode?'],
+					notes: 'Job-style endpoint with step budget/deadline controls. Legacy no-op payloads run to completion. mode: all | first-only | last-and-call-only'
 				},
 				{
 					method: 'POST',
 					path: '/API/engagement/engagement-sync',
 					summary: 'Reclassifies Engagement Status and Engagement Status Date from enrollment + recency rules.',
-					arguments: ['dryRun?', 'enrolledLookbackDays?', 'perPage?']
+					arguments: ['op=create|step|cancel|cleanup', 'jobId?', 'dryRun?', 'enrolledLookbackDays?', 'perPage?'],
+					notes: 'Job-style endpoint with step budget/deadline controls. Legacy no-op payloads run to completion.'
 				},
 				{
 					method: 'POST',
 					path: '/API/engagement/referral-sync',
 					summary: 'Applies referral-based program attributes for eligible member cohorts.',
-					arguments: ['dryRun?', 'referralValue?', 'eligibleProgramsValue?', 'perPage?']
+					arguments: ['op=create|step|cancel|cleanup', 'jobId?', 'dryRun?', 'referralValue?', 'eligibleProgramsValue?', 'perPage?'],
+					notes: 'Job-style endpoint with step budget/deadline controls. Legacy no-op payloads run to completion.'
 				}
 			]
 		},
