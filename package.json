@@ -45,6 +45,7 @@
 		"vitest-browser-svelte": "^2.0.1"
 	},
 	"dependencies": {
-		"amplify-adapter": "^1.2.3"
+		"amplify-adapter": "^1.2.3",
+		"pg": "^8.20.0"
 	}
 }
