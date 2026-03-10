@@ -1,5 +1,7 @@
 export const QUALIFYING_COACHING_CHANNELS = ['Phone', 'Video Conference'] as const;
 export const QUALIFYING_COACHING_SERVICE_CODES = [
+	'Health Coaching',
+	'Disease Management',
 	'Health Coaching 001',
 	'Disease Management 002'
 ] as const;

@@ -1,5 +1,6 @@
 import {
 	INTERCOM_ATTR_CHANNEL,
+	INTERCOM_ATTR_ELIGIBLE_PROGRAMS,
 	INTERCOM_ATTR_EMPLOYER,
 	INTERCOM_ATTR_ENROLLED_DATE,
 	INTERCOM_ATTR_REGISTRATION_DATE,
@@ -21,7 +22,7 @@ type ContactLike = {
 	role: 'user';
 	name: string;
 	email: string;
-	custom_attributes: Record<string, string | number>;
+	custom_attributes: Record<string, string | number | string[]>;
 };
 
 type ConversationLike = {
@@ -128,6 +129,22 @@ const EMPLOYERS = [
 	'Atlas Workforce'
 ];
 
+const PROGRAM_CATEGORIES = [
+	'Weight Management',
+	'Smoking Cessation',
+	'Cardio Health',
+	'Mental Health',
+	'Medication Adherence'
+];
+
+const SERVICE_CODE_CATEGORIES = [
+	'Health Coaching',
+	'Disease Management',
+	'Technical Support',
+	'Member Outreach',
+	'General Inquiry'
+];
+
 const FIRST_NAMES = [
 	'Avery',
 	'Blake',
@@ -207,18 +224,18 @@ function pickProfile(index: number): Profile {
 function getEnrollmentDaysAgo(index: number, profile: Profile): number {
 	if (index % 4 === 0) return 4 + (index % 24);
 
-	if (profile === 'high_engaged') return 8 + (index % 48);
-	if (profile === 'stable_engaged') return 24 + (index % 76);
-	if (profile === 'watchlist') return 45 + (index % 90);
-	if (profile === 'reengaged') return 70 + (index % 170);
-	return 6 + (index % 42);
+	if (profile === 'high_engaged') return 8 + (index % 90);
+	if (profile === 'stable_engaged') return 24 + (index % 180);
+	if (profile === 'watchlist') return 45 + (index % 260);
+	if (profile === 'reengaged') return 70 + (index % 420);
+	return 6 + (index % 140);
 }
 
 function getLastSessionDaysAgo(index: number, profile: Profile): number | null {
-	if (profile === 'high_engaged') return 1 + (index % 12);
-	if (profile === 'stable_engaged') return 8 + (index % 32);
-	if (profile === 'watchlist') return 38 + (index % 48);
-	if (profile === 'reengaged') return 2 + (index % 10);
+	if (profile === 'high_engaged') return 1 + (index % 20);
+	if (profile === 'stable_engaged') return 8 + (index % 70);
+	if (profile === 'watchlist') return 38 + (index % 130);
+	if (profile === 'reengaged') return 2 + (index % 25);
 	return null;
 }
 
@@ -229,6 +246,7 @@ function buildContact(args: {
 	employer: string;
 	registrationUnix: number;
 	enrolledUnix: number;
+	eligiblePrograms: string[];
 }): ContactLike {
 	return {
 		id: args.id,
@@ -237,6 +255,7 @@ function buildContact(args: {
 		email: args.email,
 		custom_attributes: {
 			[INTERCOM_ATTR_EMPLOYER]: args.employer,
+			[INTERCOM_ATTR_ELIGIBLE_PROGRAMS]: args.eligiblePrograms,
 			[INTERCOM_ATTR_REGISTRATION_DATE]: args.registrationUnix,
 			[INTERCOM_ATTR_ENROLLED_DATE]: args.enrolledUnix
 		}
@@ -733,7 +752,14 @@ export function buildSyntheticEngagementData(opts: SyntheticDataOptions = {}): S
 				email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}.${index}@example.test`,
 				employer,
 				registrationUnix,
-				enrolledUnix
+				enrolledUnix,
+				eligiblePrograms:
+					index % 4 === 0
+						? [
+								PROGRAM_CATEGORIES[index % PROGRAM_CATEGORIES.length],
+								PROGRAM_CATEGORIES[(index + 2) % PROGRAM_CATEGORIES.length]
+							]
+						: [PROGRAM_CATEGORIES[index % PROGRAM_CATEGORIES.length]]
 			})
 		);
 
@@ -757,11 +783,9 @@ export function buildSyntheticEngagementData(opts: SyntheticDataOptions = {}): S
 				const channel = STANDARD_REPORT_SESSION_CHANNELS[(index + j) % STANDARD_REPORT_SESSION_CHANNELS.length];
 				const isCallChannel = channel === 'Phone' || channel === 'Video Conference';
 				const serviceCode =
-					isCallChannel && (index + j) % 7 !== 0
-						? (index + j) % 2 === 0
-							? 'Health Coaching 001'
-							: 'Disease Management 002'
-						: 'Support 000';
+					isCallChannel && (index + j) % 2 === 0
+						? SERVICE_CODE_CATEGORIES[(index + j) % 2]
+						: SERVICE_CODE_CATEGORIES[(index + j + 2) % SERVICE_CODE_CATEGORIES.length];
 
 				const conversation = buildConversation({
 					id: `c${String(conversationCounter).padStart(6, '0')}`,
@@ -789,7 +813,7 @@ export function buildSyntheticEngagementData(opts: SyntheticDataOptions = {}): S
 						memberId,
 						state: 'open',
 						channel: 'Phone',
-						serviceCode: 'Health Coaching 001',
+						serviceCode: 'Health Coaching',
 						createdAtUnix: daysAgo(anchorUnix, Math.max(1, lastSessionDaysAgo - 1)),
 						adminId: admins[index % admins.length].id
 					})

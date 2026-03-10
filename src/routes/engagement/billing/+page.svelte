@@ -343,7 +343,7 @@
 			</div>
 
 			<div class="flex items-center gap-2">
-				<Button onclick={loadBilling} disabled={loading}>
+				<Button variant="destructive" class="bg-red-700 text-white hover:bg-red-600 border-red-700" onclick={loadBilling} disabled={loading}>
 					{loading ? 'Loading...' : 'Run'}
 				</Button>
 				<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset</Button>
