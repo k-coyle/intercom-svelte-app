@@ -1,22 +1,3 @@
-declare module 'pg' {
-	export interface QueryResult<T = any> {
-		rows: T[];
-		rowCount: number | null;
-	}
-
-	export interface PoolClient {
-		query<T = any>(text: string, params?: any[]): Promise<QueryResult<T>>;
-		release(): void;
-	}
-
-	export class Pool {
-		constructor(config?: any);
-		on(event: string, listener: (err: unknown) => void): void;
-		query<T = any>(text: string, params?: any[]): Promise<QueryResult<T>>;
-		connect(): Promise<PoolClient>;
-	}
-}
-
 declare module 'node:fs' {
 	const fs: {
 		existsSync(path: string): boolean;

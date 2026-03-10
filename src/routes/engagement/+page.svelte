@@ -86,17 +86,10 @@
 					summary: 'Returns redacted OnceHub booking samples with field inventory and quick stats.',
 					arguments: ['limit?'],
 					notes: 'Outside dev, requires x-explore-token header.'
-				},
-				{
-					method: 'GET',
-					path: '/API/explore/postgres/tables?schema=public',
-					summary: 'Returns schema/table inventory for PostgreSQL debugging and source validation.',
-					arguments: ['schema?'],
-					notes: 'Requires EXPLORER_ENABLED=true.'
 				}
 			]
 		}
-	];
+		];
 
 	function signed(value: number): string {
 		return value >= 0 ? `+${value}` : String(value);
