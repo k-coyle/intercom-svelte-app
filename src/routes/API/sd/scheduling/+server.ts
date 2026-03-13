@@ -1,5 +1,5 @@
 import type { RequestHandler } from '@sveltejs/kit';
-import { ONCEHUB_API_BASE, ONCEHUB_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import { intercomRequest } from '$lib/server/intercom-provider';
 import {
 	isAbortError,
@@ -24,7 +24,7 @@ import {
 } from '$lib/server/sd-report-utils';
 
 const log = createReportLogger('sd-scheduling');
-const ONCEHUB_BASE_URL = (ONCEHUB_API_BASE || 'https://api.oncehub.com/v2').replace(/\/+$/, '');
+const ONCEHUB_BASE_URL = (env.ONCEHUB_API_BASE || 'https://api.oncehub.com/v2').replace(/\/+$/, '');
 const ONCEHUB_PAGE_LIMIT = 100;
 const ONCEHUB_MAX_PAGES = 80;
 const CONTACT_LOOKUP_BATCH = 12;
@@ -187,11 +187,11 @@ function parseLinkHeaderNext(linkHeader: string | null): string | null {
 }
 
 function oncehubHeaders(): Record<string, string> {
-	if (!ONCEHUB_API_KEY) {
+	if (!env.ONCEHUB_API_KEY) {
 		throw new Error('ONCEHUB_API_KEY is not set');
 	}
 	return {
-		'API-Key': ONCEHUB_API_KEY,
+		'API-Key': env.ONCEHUB_API_KEY,
 		Accept: 'application/json'
 	};
 }

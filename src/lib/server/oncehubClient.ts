@@ -1,7 +1,7 @@
 // src/lib/server/oncehubClient.ts
-import { ONCEHUB_API_KEY, ONCEHUB_API_BASE } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
-const ONCEHUB_BASE_URL = ONCEHUB_API_BASE || 'https://api.oncehub.com/v2';
+const ONCEHUB_BASE_URL = env.ONCEHUB_API_BASE || 'https://api.oncehub.com/v2';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_RETRIES = 3;
 
@@ -33,7 +33,7 @@ export type FetchOnceHubOptions = {
 };
 
 function assertConfigured() {
-  if (!ONCEHUB_API_KEY) {
+  if (!env.ONCEHUB_API_KEY) {
     throw new Error('ONCEHUB_API_KEY is not set');
   }
 }
@@ -98,6 +98,7 @@ export async function fetchOnceHub<T = unknown>(
   opts: FetchOnceHubOptions = {}
 ): Promise<OnceHubResult<T>> {
   assertConfigured();
+  const apiKey = env.ONCEHUB_API_KEY!;
 
   const method = opts.method ?? 'GET';
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -114,7 +115,7 @@ export async function fetchOnceHub<T = unknown>(
         method,
         headers: {
           // OnceHub auth header name is API-Key (server-side only). See docs.
-          'API-Key': ONCEHUB_API_KEY!,
+          'API-Key': apiKey,
           Accept: 'application/json',
           ...(method !== 'GET' ? { 'Content-Type': 'application/json' } : {}),
           ...(opts.headers ?? {})

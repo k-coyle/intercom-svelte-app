@@ -1,7 +1,7 @@
 // src/routes/API/explore/oncehub/sample-bookings/+server.ts
 import type { RequestHandler } from '@sveltejs/kit';
 import { dev } from '$app/environment';
-import { ONCEHUB_EXPLORE_TOKEN } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import { fetchOnceHub } from '$lib/server/oncehubClient';
 
 const DEFAULT_LIMIT = 25;
@@ -12,12 +12,12 @@ function requireExploreAuth(request: Request) {
   if (dev) return;
 
   // Simple shared-secret guardrail (recommended for these exploration endpoints)
-  if (!ONCEHUB_EXPLORE_TOKEN) {
+  if (!env.ONCEHUB_EXPLORE_TOKEN) {
     throw new Error('ONCEHUB_EXPLORE_TOKEN is not set (required outside dev)');
   }
 
   const token = request.headers.get('x-explore-token');
-  if (!token || token !== ONCEHUB_EXPLORE_TOKEN) {
+  if (!token || token !== env.ONCEHUB_EXPLORE_TOKEN) {
     const err: any = new Error('Forbidden');
     err.status = 403;
     throw err;
