@@ -1,5 +1,6 @@
 // src/lib/server/oncehubClient.ts
 import { env } from '$env/dynamic/private';
+import { ONCEHUB_API_KEY } from '$env/static/private';
 
 const ONCEHUB_BASE_URL = env.ONCEHUB_API_BASE || 'https://api.oncehub.com/v2';
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -33,7 +34,7 @@ export type FetchOnceHubOptions = {
 };
 
 function assertConfigured() {
-  if (!env.ONCEHUB_API_KEY) {
+  if (!ONCEHUB_API_KEY) {
     throw new Error('ONCEHUB_API_KEY is not set');
   }
 }
@@ -98,7 +99,7 @@ export async function fetchOnceHub<T = unknown>(
   opts: FetchOnceHubOptions = {}
 ): Promise<OnceHubResult<T>> {
   assertConfigured();
-  const apiKey = env.ONCEHUB_API_KEY!;
+  const apiKey = ONCEHUB_API_KEY;
 
   const method = opts.method ?? 'GET';
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;

@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
+import { ONCEHUB_API_KEY } from '$env/static/private';
 import { intercomRequest } from '$lib/server/intercom-provider';
 import {
 	isAbortError,
@@ -187,11 +188,11 @@ function parseLinkHeaderNext(linkHeader: string | null): string | null {
 }
 
 function oncehubHeaders(): Record<string, string> {
-	if (!env.ONCEHUB_API_KEY) {
+	if (!ONCEHUB_API_KEY) {
 		throw new Error('ONCEHUB_API_KEY is not set');
 	}
 	return {
-		'API-Key': env.ONCEHUB_API_KEY,
+		'API-Key': ONCEHUB_API_KEY,
 		Accept: 'application/json'
 	};
 }
