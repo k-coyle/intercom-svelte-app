@@ -13,6 +13,55 @@ type FetchJobViewOptions = {
 	signal?: AbortSignal;
 };
 
+const JOB_NOT_FOUND_RETRY_LIMIT = 8;
+const JOB_NOT_FOUND_RETRY_DELAY_MS = 200;
+
+function isJobNotFoundError(error: unknown, jobId: string): boolean {
+	const message = String((error as any)?.message ?? error ?? '');
+	return message.includes('HTTP 404') && message.includes('Job not found') && message.includes(jobId);
+}
+
+async function waitWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+	if (ms <= 0) return;
+	if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+	await new Promise<void>((resolve, reject) => {
+		let timeout: ReturnType<typeof setTimeout> | null = null;
+		const onAbort = () => {
+			if (timeout) clearTimeout(timeout);
+			signal?.removeEventListener('abort', onAbort);
+			reject(new DOMException('Aborted', 'AbortError'));
+		};
+
+		timeout = setTimeout(() => {
+			signal?.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+
+		signal?.addEventListener('abort', onAbort, { once: true });
+	});
+}
+
+async function withJobNotFoundRetry<T>(
+	run: () => Promise<T>,
+	jobId: string,
+	signal?: AbortSignal
+): Promise<T> {
+	let attempt = 0;
+	while (true) {
+		if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+		try {
+			return await run();
+		} catch (error) {
+			if (!isJobNotFoundError(error, jobId) || attempt >= JOB_NOT_FOUND_RETRY_LIMIT) {
+				throw error;
+			}
+			attempt += 1;
+			await waitWithAbort(JOB_NOT_FOUND_RETRY_DELAY_MS * attempt, signal);
+		}
+	}
+}
+
 export async function createJob(
 	endpoint: string,
 	body: Record<string, unknown>,
@@ -33,12 +82,17 @@ export async function createJob(
 }
 
 export async function stepJob(endpoint: string, jobId: string, signal?: AbortSignal): Promise<any> {
-	return fetchJson<any>(endpoint, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ op: 'step', jobId }),
+	return withJobNotFoundRetry(
+		() =>
+			fetchJson<any>(endpoint, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ op: 'step', jobId }),
+				signal
+			}),
+		jobId,
 		signal
-	});
+	);
 }
 
 export async function cancelJob(endpoint: string, jobId: string): Promise<any> {
@@ -72,5 +126,10 @@ export async function fetchJobView<T>(endpoint: string, options: FetchJobViewOpt
 	if (options.offset != null) params.set('offset', String(options.offset));
 	if (options.limit != null) params.set('limit', String(options.limit));
 
-	return fetchJson<T>(`${endpoint}?${params.toString()}`, { signal: options.signal });
+	const url = `${endpoint}?${params.toString()}`;
+	return withJobNotFoundRetry(
+		() => fetchJson<T>(url, { signal: options.signal }),
+		options.jobId,
+		options.signal
+	);
 }

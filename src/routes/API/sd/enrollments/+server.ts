@@ -491,6 +491,7 @@ export const GET: RequestHandler = async ({ url }) => {
 			headers: { 'Content-Type': 'application/json' }
 		});
 	}
+	job.updatedAtMs = Date.now();
 
 	const view = url.searchParams.get('view');
 	if (!view) {
