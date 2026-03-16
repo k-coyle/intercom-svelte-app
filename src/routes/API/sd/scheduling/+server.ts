@@ -1,6 +1,5 @@
 import type { RequestHandler } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
-import { ONCEHUB_API_KEY } from '$env/static/private';
+import { ONCEHUB_API_KEY, ONCEHUB_API_BASE } from '$env/static/private';
 import { intercomRequest } from '$lib/server/intercom-provider';
 import {
 	isAbortError,
@@ -25,7 +24,7 @@ import {
 } from '$lib/server/sd-report-utils';
 
 const log = createReportLogger('sd-scheduling');
-const ONCEHUB_BASE_URL = (env.ONCEHUB_API_BASE || 'https://api.oncehub.com/v2').replace(/\/+$/, '');
+const ONCEHUB_BASE_URL = (ONCEHUB_API_BASE || 'https://api.oncehub.com/v2').replace(/\/+$/, '');
 const ONCEHUB_PAGE_LIMIT = 100;
 const ONCEHUB_MAX_PAGES = 80;
 const CONTACT_LOOKUP_BATCH = 12;
