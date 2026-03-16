@@ -1,7 +1,7 @@
 // src/lib/server/oncehubClient.ts
 import { INTERCOM_API_BASE, INTERCOM_ACCESS_TOKEN } from '$env/static/private';
-import { ONCEHUB_API_KEY} from '$env/static/private';
-import {ONCEHUB_API_BASE} from '$env/static/private';
+import { ONCEHUB_API_KEY } from '$env/static/private';
+import {ONCEHUB_API_BASE } from '$env/static/private';
 const ONCEHUB_BASE_URL = ONCEHUB_API_BASE || 'https://api.oncehub.com/v2';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_RETRIES = 3;

@@ -1,7 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { INTERCOM_API_BASE, INTERCOM_ACCESS_TOKEN } from '$env/static/private';
-import { ONCEHUB_API_KEY} from '$env/dynamic/private';
-import {ONCEHUB_API_BASE} from '$env/dynamic/private';
+import { ONCEHUB_API_KEY } from '$env/static/private';
+import {ONCEHUB_API_BASE } from '$env/static/private';
 import { intercomRequest } from '$lib/server/intercom-provider';
 import {
 	isAbortError,
