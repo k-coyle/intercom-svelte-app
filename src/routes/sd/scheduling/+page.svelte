@@ -118,6 +118,7 @@
 	let comparisonSummary: SchedulingSummary | null = null;
 	let comparisonLoadedRows: SchedulingRow[] = [];
 	let comparisonLoadedKey = '';
+	let comparisonInputsSignature = '';
 	let comparisonDisplayEnabled = false;
 	let loading = false;
 	let error: string | null = null;
@@ -380,6 +381,18 @@
 		return `${selectedDateBasis}:${range.startDate}..${range.endDate}`;
 	}
 
+	function comparisonSignature(): string {
+		return [
+			comparisonEnabled ? 'enabled' : 'disabled',
+			comparisonMode,
+			comparisonStart,
+			comparisonEnd,
+			rangeStart,
+			rangeEnd,
+			selectedDateBasis
+		].join('|');
+	}
+
 	async function fetchDatasetForDates(
 		startDate: string,
 		endDate: string,
@@ -517,6 +530,14 @@
 	let heatmapSessions: Array<{ startingUnix: number; status: SchedulingRow['status'] }> = [];
 	let chipItems: FilterChip[] = [];
 	let modalFilterLabels: string[] = [];
+
+	$: {
+		const nextSignature = comparisonSignature();
+		if (comparisonInputsSignature && nextSignature !== comparisonInputsSignature) {
+			comparisonLoadedKey = '';
+		}
+		comparisonInputsSignature = nextSignature;
+	}
 
 	$: {
 		const activeComparisonKey = comparisonSelectionKey();

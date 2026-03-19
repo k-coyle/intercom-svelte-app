@@ -94,6 +94,7 @@
 	let comparisonSummary: EnrollmentSummary | null = null;
 	let comparisonLoadedRows: EnrollmentRow[] = [];
 	let comparisonLoadedKey = '';
+	let comparisonInputsSignature = '';
 	let comparisonDisplayEnabled = false;
 	let loading = false;
 	let error: string | null = null;
@@ -496,6 +497,17 @@
 		return `${range.startDate}..${range.endDate}`;
 	}
 
+	function comparisonSignature(): string {
+		return [
+			comparisonEnabled ? 'enabled' : 'disabled',
+			comparisonMode,
+			comparisonStart,
+			comparisonEnd,
+			rangeStart,
+			rangeEnd
+		].join('|');
+	}
+
 	async function fetchDatasetForDates(
 		startDate: string,
 		endDate: string,
@@ -650,6 +662,14 @@
 	let table: Array<Record<string, string>> = [];
 	let chips: FilterChip[] = [];
 	let modalFilterLabels: string[] = [];
+
+	$: {
+		const nextSignature = comparisonSignature();
+		if (comparisonInputsSignature && nextSignature !== comparisonInputsSignature) {
+			comparisonLoadedKey = '';
+		}
+		comparisonInputsSignature = nextSignature;
+	}
 
 	$: {
 		const activeComparisonKey = comparisonSelectionKey();
