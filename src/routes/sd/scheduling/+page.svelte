@@ -117,11 +117,15 @@
 	let loadedRows: SchedulingRow[] = [];
 	let comparisonSummary: SchedulingSummary | null = null;
 	let comparisonLoadedRows: SchedulingRow[] = [];
+	let comparisonLoadedKey = '';
+	let comparisonDisplayEnabled = false;
 	let loading = false;
 	let error: string | null = null;
 	let progressText: string | null = null;
 	let activeJobId = '';
 	let activeComparisonJobId = '';
+	const sessionJobIds = new Set<string>();
+	const jobIdByRangeKey = new Map<string, string>();
 	let controller: AbortController | null = null;
 
 	let programOptions: string[] = [];
@@ -361,6 +365,21 @@
 		return previousPeriodRange(rangeStart, rangeEnd);
 	}
 
+	function isJobNotFoundError(err: unknown): boolean {
+		const message = String((err as any)?.message ?? err ?? '');
+		return message.includes('HTTP 404') && message.includes('Job not found');
+	}
+
+	function datasetKey(startDate: string, endDate: string): string {
+		return `${selectedDateBasis}:${startDate}..${endDate}`;
+	}
+
+	function comparisonSelectionKey(): string {
+		const range = resolvedComparisonRange();
+		if (!comparisonEnabled || !range) return '';
+		return `${selectedDateBasis}:${range.startDate}..${range.endDate}`;
+	}
+
 	async function fetchDatasetForDates(
 		startDate: string,
 		endDate: string,
@@ -368,45 +387,66 @@
 	): Promise<{ summary: SchedulingSummary; rows: SchedulingRow[] }> {
 		if (!controller) throw new Error('Missing abort controller');
 		const tag = kind === 'comparison' ? 'comparison' : 'reporting';
-		let jobIdForCleanup = '';
-		try {
-			const { jobId } = await runSdSchedulingJobUntilComplete({
-				startDate,
-				endDate,
-				dateBasis: selectedDateBasis,
-				signal: controller.signal,
-				onJobCreated: (createdJobId) => {
-					jobIdForCleanup = createdJobId;
-					if (kind === 'primary') activeJobId = createdJobId;
-					else activeComparisonJobId = createdJobId;
-				},
-				onProgress: (progress) => {
-					const p = progress?.progress ?? {};
-					progressText = `${tag} | basis ${dateBasisLabel(progress?.dateBasis ?? selectedDateBasis)} | phase ${progress?.phase ?? 'running'} | pages ${p.oncehubPagesFetched ?? 0} | bookings ${p.rawBookings ?? 0} | contacts ${p.contactsLoaded ?? 0}`;
-				}
-			});
-			jobIdForCleanup = jobId;
-			const [loadedSummary, rows] = await Promise.all([
-				fetchSdSchedulingView<SchedulingSummary>(jobId, 'summary', undefined, undefined, controller.signal),
-				fetchAllSdSchedulingRows<SchedulingRow>({
-					jobId,
-					limit: 1000,
-					signal: controller.signal,
-					onPage: ({ loaded, total }) => {
-						progressText = `${tag} | loading scheduling rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
-					}
-				})
-			]);
-			return { summary: loadedSummary, rows };
-		} finally {
-			if (jobIdForCleanup) {
-				void cleanupSdSchedulingJob(jobIdForCleanup);
-				if (kind === 'primary' && activeJobId === jobIdForCleanup) activeJobId = '';
-				if (kind === 'comparison' && activeComparisonJobId === jobIdForCleanup) {
-					activeComparisonJobId = '';
-				}
+		const cacheKey = datasetKey(startDate, endDate);
+		const cachedJobId = jobIdByRangeKey.get(cacheKey) ?? '';
+		if (cachedJobId) {
+			try {
+				progressText = `${tag} | reusing cached job ${cachedJobId}...`;
+				const [loadedSummary, rows] = await Promise.all([
+					fetchSdSchedulingView<SchedulingSummary>(
+						cachedJobId,
+						'summary',
+						undefined,
+						undefined,
+						controller.signal
+					),
+					fetchAllSdSchedulingRows<SchedulingRow>({
+						jobId: cachedJobId,
+						limit: 1000,
+						signal: controller.signal,
+						onPage: ({ loaded, total }) => {
+							progressText = `${tag} | loading cached scheduling rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+						}
+					})
+				]);
+				return { summary: loadedSummary, rows };
+			} catch (err) {
+				if (!isJobNotFoundError(err)) throw err;
+				jobIdByRangeKey.delete(cacheKey);
+				sessionJobIds.delete(cachedJobId);
 			}
 		}
+
+		const { jobId } = await runSdSchedulingJobUntilComplete({
+			startDate,
+			endDate,
+			dateBasis: selectedDateBasis,
+			signal: controller.signal,
+			onJobCreated: (createdJobId) => {
+				if (kind === 'primary') activeJobId = createdJobId;
+				else activeComparisonJobId = createdJobId;
+				sessionJobIds.add(createdJobId);
+				jobIdByRangeKey.set(cacheKey, createdJobId);
+			},
+			onProgress: (progress) => {
+				const p = progress?.progress ?? {};
+				progressText = `${tag} | basis ${dateBasisLabel(progress?.dateBasis ?? selectedDateBasis)} | phase ${progress?.phase ?? 'running'} | pages ${p.oncehubPagesFetched ?? 0} | bookings ${p.rawBookings ?? 0} | contacts ${p.contactsLoaded ?? 0}`;
+			}
+		});
+		const [loadedSummary, rows] = await Promise.all([
+			fetchSdSchedulingView<SchedulingSummary>(jobId, 'summary', undefined, undefined, controller.signal),
+			fetchAllSdSchedulingRows<SchedulingRow>({
+				jobId,
+				limit: 1000,
+				signal: controller.signal,
+				onPage: ({ loaded, total }) => {
+					progressText = `${tag} | loading scheduling rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+				}
+			})
+		]);
+		if (kind === 'primary' && activeJobId === jobId) activeJobId = '';
+		if (kind === 'comparison' && activeComparisonJobId === jobId) activeComparisonJobId = '';
+		return { summary: loadedSummary, rows };
 	}
 
 	async function runReport(): Promise<void> {
@@ -447,6 +487,9 @@
 			loadedRows = primary.rows;
 			comparisonSummary = comparison?.summary ?? null;
 			comparisonLoadedRows = comparison?.rows ?? [];
+			comparisonLoadedKey = comparisonRange
+				? `${selectedDateBasis}:${comparisonRange.startDate}..${comparisonRange.endDate}`
+				: '';
 			refreshFilterOptions();
 			setSandboxBounds(primary.summary);
 		} catch (err: any) {
@@ -455,6 +498,7 @@
 			loadedRows = [];
 			comparisonSummary = null;
 			comparisonLoadedRows = [];
+			comparisonLoadedKey = '';
 		} finally {
 			loading = false;
 			progressText = null;
@@ -473,6 +517,15 @@
 	let heatmapSessions: Array<{ startingUnix: number; status: SchedulingRow['status'] }> = [];
 	let chipItems: FilterChip[] = [];
 	let modalFilterLabels: string[] = [];
+
+	$: {
+		const activeComparisonKey = comparisonSelectionKey();
+		comparisonDisplayEnabled =
+			comparisonEnabled &&
+			activeComparisonKey.length > 0 &&
+			comparisonLoadedKey.length > 0 &&
+			activeComparisonKey === comparisonLoadedKey;
+	}
 
 	$: {
 		loadedRows;
@@ -529,8 +582,11 @@
 
 	onDestroy(() => {
 		controller?.abort();
-		if (activeJobId) void cleanupSdSchedulingJob(activeJobId, true);
-		if (activeComparisonJobId) void cleanupSdSchedulingJob(activeComparisonJobId, true);
+		for (const jobId of sessionJobIds) {
+			void cleanupSdSchedulingJob(jobId, true);
+		}
+		sessionJobIds.clear();
+		jobIdByRangeKey.clear();
 	});
 </script>
 
@@ -678,29 +734,29 @@
 		<KpiCard
 			title="Total Sessions"
 			value={rows.length}
-			comparisonEnabled={comparisonEnabled}
-			comparisonValue={comparisonEnabled ? comparisonRows.length : null}
+			comparisonEnabled={comparisonDisplayEnabled}
+			comparisonValue={comparisonDisplayEnabled ? comparisonRows.length : null}
 			comparisonTrend="higher_is_better"
 		/>
 		<KpiCard
 			title="Scheduled Sessions"
 			value={scheduledCount}
-			comparisonEnabled={comparisonEnabled}
-			comparisonValue={comparisonEnabled ? comparisonScheduledCount : null}
+			comparisonEnabled={comparisonDisplayEnabled}
+			comparisonValue={comparisonDisplayEnabled ? comparisonScheduledCount : null}
 			comparisonTrend="neutral"
 		/>
 		<KpiCard
 			title="Completed Sessions"
 			value={completedCount}
-			comparisonEnabled={comparisonEnabled}
-			comparisonValue={comparisonEnabled ? comparisonCompletedCount : null}
+			comparisonEnabled={comparisonDisplayEnabled}
+			comparisonValue={comparisonDisplayEnabled ? comparisonCompletedCount : null}
 			comparisonTrend="higher_is_better"
 		/>
 		<KpiCard
 			title="Missed Sessions (Rescheduled + No-Show)"
 			value={missedCount}
-			comparisonEnabled={comparisonEnabled}
-			comparisonValue={comparisonEnabled ? comparisonMissedCount : null}
+			comparisonEnabled={comparisonDisplayEnabled}
+			comparisonValue={comparisonDisplayEnabled ? comparisonMissedCount : null}
 			comparisonTrend="lower_is_better"
 		/>
 	</div>

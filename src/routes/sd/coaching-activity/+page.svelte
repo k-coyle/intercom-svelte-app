@@ -109,11 +109,15 @@
 	let loadedRows: CoachingRow[] = [];
 	let comparisonSummary: CoachingSummary | null = null;
 	let comparisonLoadedRows: CoachingRow[] = [];
+	let comparisonLoadedKey = '';
+	let comparisonDisplayEnabled = false;
 	let loading = false;
 	let error: string | null = null;
 	let progressText: string | null = null;
 	let activePrimaryJobId = '';
 	let activeComparisonJobId = '';
+	const sessionJobIds = new Set<string>();
+	const jobIdByRangeKey = new Map<string, string>();
 	let controller: AbortController | null = null;
 
 	let programOptions: string[] = [];
@@ -514,6 +518,21 @@
 		return previousPeriodRange(rangeStart, rangeEnd);
 	}
 
+	function isJobNotFoundError(err: unknown): boolean {
+		const message = String((err as any)?.message ?? err ?? '');
+		return message.includes('HTTP 404') && message.includes('Job not found');
+	}
+
+	function datasetKey(startDate: string, endDate: string): string {
+		return `${startDate}..${endDate}`;
+	}
+
+	function comparisonSelectionKey(): string {
+		const range = resolvedComparisonRange();
+		if (!comparisonEnabled || !range) return '';
+		return `${range.startDate}..${range.endDate}`;
+	}
+
 	async function fetchDatasetForDates(
 		startDate: string,
 		endDate: string,
@@ -521,49 +540,72 @@
 	): Promise<{ summary: CoachingSummary; rows: CoachingRow[] }> {
 		if (!controller) throw new Error('Missing abort controller');
 		const tag = kind === 'comparison' ? 'comparison' : 'reporting';
-		let createdJobId = '';
-		try {
-			const { jobId } = await runSdCoachingActivityJobUntilComplete({
-				startDate,
-				endDate,
-				signal: controller.signal,
-				onJobCreated: (id) => {
-					createdJobId = id;
-					if (kind === 'primary') activePrimaryJobId = id;
-					else activeComparisonJobId = id;
-				},
-				onProgress: (progress) => {
-					const p = progress?.progress ?? {};
-					progressText = `${tag} | phase ${progress?.phase ?? 'running'} | conv pages ${p.conversationPagesFetched ?? 0} | details ${p.detailsLoaded ?? 0} | contacts ${p.contactsLoaded ?? 0}`;
-				}
-			});
-			createdJobId = jobId;
-
-			const [loadedSummary, rows] = await Promise.all([
-				fetchSdCoachingActivityView<CoachingSummary>(
-					jobId,
-					'summary',
-					undefined,
-					undefined,
-					controller.signal
-				),
-				fetchAllSdCoachingActivityRows<CoachingRow>({
-					jobId,
-					limit: 1000,
-					signal: controller.signal,
-					onPage: ({ loaded, total }) => {
-						progressText = `${tag} | loading coaching rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
-					}
-				})
-			]);
-			return { summary: loadedSummary, rows };
-		} finally {
-			if (createdJobId) {
-				void cleanupSdCoachingActivityJob(createdJobId);
-				if (kind === 'primary' && activePrimaryJobId === createdJobId) activePrimaryJobId = '';
-				if (kind === 'comparison' && activeComparisonJobId === createdJobId) activeComparisonJobId = '';
+		const cacheKey = datasetKey(startDate, endDate);
+		const cachedJobId = jobIdByRangeKey.get(cacheKey) ?? '';
+		if (cachedJobId) {
+			try {
+				progressText = `${tag} | reusing cached job ${cachedJobId}...`;
+				const [loadedSummary, rows] = await Promise.all([
+					fetchSdCoachingActivityView<CoachingSummary>(
+						cachedJobId,
+						'summary',
+						undefined,
+						undefined,
+						controller.signal
+					),
+					fetchAllSdCoachingActivityRows<CoachingRow>({
+						jobId: cachedJobId,
+						limit: 1000,
+						signal: controller.signal,
+						onPage: ({ loaded, total }) => {
+							progressText = `${tag} | loading cached coaching rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+						}
+					})
+				]);
+				return { summary: loadedSummary, rows };
+			} catch (err) {
+				if (!isJobNotFoundError(err)) throw err;
+				jobIdByRangeKey.delete(cacheKey);
+				sessionJobIds.delete(cachedJobId);
 			}
 		}
+
+		const { jobId } = await runSdCoachingActivityJobUntilComplete({
+			startDate,
+			endDate,
+			signal: controller.signal,
+			onJobCreated: (id) => {
+				if (kind === 'primary') activePrimaryJobId = id;
+				else activeComparisonJobId = id;
+				sessionJobIds.add(id);
+				jobIdByRangeKey.set(cacheKey, id);
+			},
+			onProgress: (progress) => {
+				const p = progress?.progress ?? {};
+				progressText = `${tag} | phase ${progress?.phase ?? 'running'} | conv pages ${p.conversationPagesFetched ?? 0} | details ${p.detailsLoaded ?? 0} | contacts ${p.contactsLoaded ?? 0}`;
+			}
+		});
+
+		const [loadedSummary, rows] = await Promise.all([
+			fetchSdCoachingActivityView<CoachingSummary>(
+				jobId,
+				'summary',
+				undefined,
+				undefined,
+				controller.signal
+			),
+			fetchAllSdCoachingActivityRows<CoachingRow>({
+				jobId,
+				limit: 1000,
+				signal: controller.signal,
+				onPage: ({ loaded, total }) => {
+					progressText = `${tag} | loading coaching rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+				}
+			})
+		]);
+		if (kind === 'primary' && activePrimaryJobId === jobId) activePrimaryJobId = '';
+		if (kind === 'comparison' && activeComparisonJobId === jobId) activeComparisonJobId = '';
+		return { summary: loadedSummary, rows };
 	}
 
 	async function runReport(): Promise<void> {
@@ -601,6 +643,7 @@
 			loadedRows = primary.rows;
 			comparisonSummary = comparison?.summary ?? null;
 			comparisonLoadedRows = comparison?.rows ?? [];
+			comparisonLoadedKey = comparisonRange ? `${comparisonRange.startDate}..${comparisonRange.endDate}` : '';
 			refreshFilterOptions();
 
 			if (data?.sandboxModeOffline) {
@@ -613,6 +656,7 @@
 			loadedRows = [];
 			comparisonSummary = null;
 			comparisonLoadedRows = [];
+			comparisonLoadedKey = '';
 		} finally {
 			loading = false;
 			progressText = null;
@@ -666,6 +710,15 @@
 	let table: Array<Record<string, string>> = [];
 	let chipItems: FilterChip[] = [];
 	let modalFilterLabels: string[] = [];
+
+	$: {
+		const activeComparisonKey = comparisonSelectionKey();
+		comparisonDisplayEnabled =
+			comparisonEnabled &&
+			activeComparisonKey.length > 0 &&
+			comparisonLoadedKey.length > 0 &&
+			activeComparisonKey === comparisonLoadedKey;
+	}
 
 	$: {
 		loadedRows;
@@ -726,8 +779,11 @@
 
 	onDestroy(() => {
 		controller?.abort();
-		if (activePrimaryJobId) void cleanupSdCoachingActivityJob(activePrimaryJobId, true);
-		if (activeComparisonJobId) void cleanupSdCoachingActivityJob(activeComparisonJobId, true);
+		for (const jobId of sessionJobIds) {
+			void cleanupSdCoachingActivityJob(jobId, true);
+		}
+		sessionJobIds.clear();
+		jobIdByRangeKey.clear();
 	});
 </script>
 
@@ -904,29 +960,29 @@
 		<KpiCard
 			title="Total Coach Encounters"
 			value={rows.length}
-			comparisonEnabled={comparisonEnabled}
-			comparisonValue={comparisonEnabled ? comparisonRows.length : null}
+			comparisonEnabled={comparisonDisplayEnabled}
+			comparisonValue={comparisonDisplayEnabled ? comparisonRows.length : null}
 			comparisonTrend="higher_is_better"
 		/>
 		<KpiCard
 			title="Unique Members"
 			value={uniqueMembers}
-			comparisonEnabled={comparisonEnabled}
-			comparisonValue={comparisonEnabled ? comparisonUniqueMembers : null}
+			comparisonEnabled={comparisonDisplayEnabled}
+			comparisonValue={comparisonDisplayEnabled ? comparisonUniqueMembers : null}
 			comparisonTrend="higher_is_better"
 		/>
 		<KpiCard
 			title="Active Coaches"
 			value={activeCoaches}
-			comparisonEnabled={comparisonEnabled}
-			comparisonValue={comparisonEnabled ? comparisonActiveCoaches : null}
+			comparisonEnabled={comparisonDisplayEnabled}
+			comparisonValue={comparisonDisplayEnabled ? comparisonActiveCoaches : null}
 			comparisonTrend="neutral"
 		/>
 		<KpiCard
 			title="Encounters / Coach"
 			value={Number(encountersPerCoach)}
-			comparisonEnabled={comparisonEnabled}
-			comparisonValue={comparisonEnabled ? comparisonEncountersPerCoach : null}
+			comparisonEnabled={comparisonDisplayEnabled}
+			comparisonValue={comparisonDisplayEnabled ? comparisonEncountersPerCoach : null}
 			comparisonTrend="neutral"
 			valueFractionDigits={2}
 			deltaFractionDigits={2}
