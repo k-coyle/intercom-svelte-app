@@ -18,7 +18,8 @@ export const engagementNav: NavItem[] = [
 	{ label: 'Caseload', href: '/engagement/caseload', icon: UsersIcon },
 	{ label: 'Sessions', href: '/engagement/sessions', icon: CalendarDaysIcon },
 	{ label: 'Enrolled', href: '/engagement/new-participants', icon: UserPlusIcon },
-	{ label: 'Billing', href: '/engagement/billing', icon: ReceiptIcon }
+	{ label: 'Billing', href: '/engagement/billing', icon: ReceiptIcon },
+	{ label: 'History', href: '/engagement/history', icon: BarChart3Icon }
 ];
 
 export const sdNav: NavItem[] = [

@@ -40,5 +40,8 @@ playwright-report/
 test-results/
 junit.xml
 
+# Local API history
+.report-history/
+
 # Misc
 *.tsbuildinfo

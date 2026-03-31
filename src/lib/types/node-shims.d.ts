@@ -16,6 +16,13 @@ declare module 'node:path' {
 	export default path;
 }
 
+declare module 'node:os' {
+	const os: {
+		tmpdir(): string;
+	};
+	export default os;
+}
+
 declare module 'crypto' {
 	export function randomUUID(): string;
 	export function createHash(algorithm: string): {
