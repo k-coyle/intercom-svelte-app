@@ -34,7 +34,9 @@ interface HistoryFile {
 }
 
 const HISTORY_MAX_RUNS = 750;
-const HISTORY_FILE_PATH = path.resolve('.report-history', 'api-history.json');
+const DEFAULT_HISTORY_FILE_PATH = path.resolve('.report-history', 'api-history.json');
+const LAMBDA_HISTORY_FILE_PATH = path.resolve('/tmp', 'report-history', 'api-history.json');
+const MEMORY_HISTORY_FILE_PATH = 'memory://report-history/api-history.json';
 
 const TRACKED_ENDPOINTS = [
 	'/API/engagement/overview',
@@ -58,6 +60,44 @@ const EMPTY_HISTORY: HistoryFile = {
 };
 
 let writeQueue: Promise<void> = Promise.resolve();
+let storageMode: 'file' | 'memory' = 'file';
+let historyFilePath = resolveInitialHistoryFilePath();
+let memoryHistory: HistoryFile = { ...EMPTY_HISTORY, runs: [] };
+
+function normalizePath(raw: unknown): string | null {
+	const value = typeof raw === 'string' ? raw.trim() : '';
+	return value ? path.resolve(value) : null;
+}
+
+function isLikelyLambdaRuntime(): boolean {
+	return Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || String(process.env.AWS_EXECUTION_ENV ?? '').includes('Lambda'));
+}
+
+function resolveInitialHistoryFilePath(): string {
+	const envPath = normalizePath(process.env.REPORT_HISTORY_FILE_PATH);
+	if (envPath) return envPath;
+	if (isLikelyLambdaRuntime()) return LAMBDA_HISTORY_FILE_PATH;
+	return DEFAULT_HISTORY_FILE_PATH;
+}
+
+function isFsWritePermissionError(error: any): boolean {
+	const code = String(error?.code ?? '');
+	return code === 'EACCES' || code === 'EPERM' || code === 'EROFS';
+}
+
+function trySwitchToLambdaPath(reason: unknown): boolean {
+	if (historyFilePath === LAMBDA_HISTORY_FILE_PATH) return false;
+	historyFilePath = LAMBDA_HISTORY_FILE_PATH;
+	console.warn(
+		'REPORT_HISTORY switched_to_lambda_tmp',
+		String((reason as any)?.message ?? reason ?? 'filesystem permission error')
+	);
+	return true;
+}
+
+function inMemoryHistoryPath(): string {
+	return storageMode === 'file' ? historyFilePath : MEMORY_HISTORY_FILE_PATH;
+}
 
 function trimErrorMessage(raw: unknown): string | null {
 	if (raw == null) return null;
@@ -107,20 +147,42 @@ function coerceHistoryFile(raw: unknown): HistoryFile {
 }
 
 async function readHistoryFile(): Promise<HistoryFile> {
+	if (storageMode === 'memory') return memoryHistory;
+
 	try {
-		const raw = await fs.readFile(HISTORY_FILE_PATH, 'utf8');
+		const raw = await fs.readFile(historyFilePath, 'utf8');
 		return coerceHistoryFile(JSON.parse(raw));
 	} catch (error: any) {
 		if (error?.code === 'ENOENT') return { ...EMPTY_HISTORY, runs: [] };
+		if (isFsWritePermissionError(error) && trySwitchToLambdaPath(error)) {
+			return readHistoryFile();
+		}
 		console.error('REPORT_HISTORY read_failed', error?.message ?? String(error));
-		return { ...EMPTY_HISTORY, runs: [] };
+		storageMode = 'memory';
+		return memoryHistory;
 	}
 }
 
 async function writeHistoryFile(data: HistoryFile): Promise<void> {
-	const dir = path.dirname(HISTORY_FILE_PATH);
-	await fs.mkdir(dir, { recursive: true });
-	await fs.writeFile(HISTORY_FILE_PATH, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+	if (storageMode === 'memory') {
+		memoryHistory = data;
+		return;
+	}
+
+	try {
+		const dir = path.dirname(historyFilePath);
+		await fs.mkdir(dir, { recursive: true });
+		await fs.writeFile(historyFilePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+		memoryHistory = data;
+	} catch (error: any) {
+		if (isFsWritePermissionError(error) && trySwitchToLambdaPath(error)) {
+			await writeHistoryFile(data);
+			return;
+		}
+		console.error('REPORT_HISTORY write_failed', error?.message ?? String(error));
+		storageMode = 'memory';
+		memoryHistory = data;
+	}
 }
 
 function summarizeEndpoint(endpoint: string, runs: HistoryRunEntry[]): EndpointHistorySummary {
@@ -191,7 +253,7 @@ export async function recordApiHistoryRun(input: {
 			});
 		})
 		.catch((error: any) => {
-			console.error('REPORT_HISTORY write_failed', error?.message ?? String(error));
+			console.error('REPORT_HISTORY queue_failed', error?.message ?? String(error));
 		});
 
 	await writeQueue;
@@ -199,6 +261,7 @@ export async function recordApiHistoryRun(input: {
 
 export async function getApiHistorySnapshot(limit = 120): Promise<{
 	filePath: string;
+	storageMode: 'file' | 'memory';
 	updatedAt: string;
 	totalRuns: number;
 	endpoints: EndpointHistorySummary[];
@@ -219,7 +282,8 @@ export async function getApiHistorySnapshot(limit = 120): Promise<{
 		.slice(0, safeLimit);
 
 	return {
-		filePath: HISTORY_FILE_PATH,
+		filePath: inMemoryHistoryPath(),
+		storageMode,
 		updatedAt: history.updatedAt,
 		totalRuns: history.runs.length,
 		endpoints,

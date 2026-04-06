@@ -31,7 +31,18 @@
 
 	type HistoryResponse = {
 		generatedAt: string;
+		buildInfo?: {
+			version: string;
+			commitHash: string | null;
+			commitShort: string | null;
+			branch: string | null;
+			commitTimestamp: string | null;
+			buildTimestamp: string | null;
+			treeState: 'clean' | 'dirty' | 'unknown';
+			source: string;
+		};
 		filePath: string;
+		storageMode?: 'file' | 'memory';
 		updatedAt: string;
 		totalRuns: number;
 		endpoints: EndpointHistorySummary[];
@@ -74,6 +85,12 @@
 		if (value == null || !Number.isFinite(value)) return '-';
 		if (value < 1000) return `${value} ms`;
 		return `${(value / 1000).toFixed(2)} s`;
+	}
+
+	function formatCommit(value: string | null, short: string | null): string {
+		if (short) return short;
+		if (!value) return 'unknown';
+		return value.slice(0, 12);
 	}
 
 	function statusClass(status: HistoryRunStatus | null): string {
@@ -167,12 +184,46 @@
 
 	<Card.Root>
 		<Card.Header>
-			<Card.Title>Endpoint Status</Card.Title>
-			<Card.Description>
-				Last update: {formatTimestamp(data?.generatedAt ?? null)} | File:
-				<code>{data?.filePath ?? '-'}</code>
-			</Card.Description>
+			<Card.Title>Build Info</Card.Title>
+			<Card.Description>Version and git commit for the currently running deployment.</Card.Description>
 		</Card.Header>
+		<Card.Content class="grid gap-2 text-sm md:grid-cols-2">
+			<div>
+				<span class="text-muted-foreground">Version:</span>
+				<code class="ml-1">{data?.buildInfo?.version ?? '-'}</code>
+			</div>
+			<div>
+				<span class="text-muted-foreground">Commit:</span>
+				<code class="ml-1">{formatCommit(data?.buildInfo?.commitHash ?? null, data?.buildInfo?.commitShort ?? null)}</code>
+			</div>
+			<div>
+				<span class="text-muted-foreground">Branch:</span>
+				<code class="ml-1">{data?.buildInfo?.branch ?? '-'}</code>
+			</div>
+			<div>
+				<span class="text-muted-foreground">Tree:</span>
+				<code class="ml-1">{data?.buildInfo?.treeState ?? 'unknown'}</code>
+			</div>
+			<div>
+				<span class="text-muted-foreground">Commit Time:</span>
+				<span class="ml-1">{formatTimestamp(data?.buildInfo?.commitTimestamp ?? null)}</span>
+			</div>
+			<div>
+				<span class="text-muted-foreground">Build Time:</span>
+				<span class="ml-1">{formatTimestamp(data?.buildInfo?.buildTimestamp ?? null)}</span>
+			</div>
+		</Card.Content>
+	</Card.Root>
+
+	<Card.Root>
+		<Card.Header>
+			<Card.Title>Endpoint Status</Card.Title>
+				<Card.Description>
+					Last update: {formatTimestamp(data?.generatedAt ?? null)} | File:
+					<code>{data?.filePath ?? '-'}</code> | Store:
+					<code>{data?.storageMode ?? 'file'}</code>
+				</Card.Description>
+			</Card.Header>
 		<Card.Content class="overflow-x-auto">
 			{#if loading}
 				<p class="text-sm text-muted-foreground">Loading endpoint history...</p>
