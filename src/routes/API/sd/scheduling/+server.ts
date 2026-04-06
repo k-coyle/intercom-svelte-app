@@ -25,6 +25,11 @@ import {
 
 const log = createReportLogger('sd-scheduling');
 const ONCEHUB_BASE_URL = (ONCEHUB_API_BASE || 'https://api.oncehub.com/v2').replace(/\/+$/, '');
+const ONCEHUB_BASE_URL_WITH_SLASH = `${ONCEHUB_BASE_URL}/`;
+const ONCEHUB_BASE_PATH_SEGMENT = new URL(ONCEHUB_BASE_URL_WITH_SLASH).pathname.replace(
+	/^\/+|\/+$/g,
+	''
+);
 const ONCEHUB_PAGE_LIMIT = 100;
 const ONCEHUB_MAX_PAGES = 80;
 const CONTACT_LOOKUP_BATCH = 12;
@@ -200,10 +205,20 @@ function oncehubHeaders(): Record<string, string> {
 	};
 }
 
+function normalizeOncehubRelativePath(pathOrUrl: string): string {
+	const raw = pathOrUrl.trim().replace(/^\/+/, '');
+	if (!ONCEHUB_BASE_PATH_SEGMENT) return raw;
+	if (raw === ONCEHUB_BASE_PATH_SEGMENT) return '';
+	if (raw.startsWith(`${ONCEHUB_BASE_PATH_SEGMENT}/`)) {
+		return raw.slice(ONCEHUB_BASE_PATH_SEGMENT.length + 1);
+	}
+	return raw;
+}
+
 function absolutizeOncehubUrl(pathOrUrl: string): string {
 	if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
-	const clean = pathOrUrl.startsWith('/') ? pathOrUrl.slice(1) : pathOrUrl;
-	return `${ONCEHUB_BASE_URL}/${clean}`;
+	const clean = normalizeOncehubRelativePath(pathOrUrl);
+	return new URL(clean, ONCEHUB_BASE_URL_WITH_SLASH).toString();
 }
 
 function oncehubFilterFieldForDateBasis(dateBasis: DateBasis): 'starting_time' | 'creation_time' {
@@ -215,7 +230,7 @@ function toIsoFromUnix(unix: number): string {
 }
 
 function buildInitialOncehubBookingsUrl(job: SchedulingJobState): string {
-	const url = new URL('/bookings', `${ONCEHUB_BASE_URL}/`);
+	const url = new URL('bookings', ONCEHUB_BASE_URL_WITH_SLASH);
 	url.searchParams.set('limit', String(ONCEHUB_PAGE_LIMIT));
 	if (job.oncehubUseDateFilters) {
 		url.searchParams.set(`${job.oncehubFilterField}.gt`, job.oncehubFilterStartIso);
@@ -245,6 +260,7 @@ function bookingMatchesRequestedWindow(booking: RawBookingSeed, job: SchedulingJ
 
 async function fetchOncehubPage(urlOrPath: string, deadlineMs: number): Promise<{ rows: any[]; nextUrl: string | null }> {
 	const url = absolutizeOncehubUrl(urlOrPath);
+	const requestPath = new URL(url).pathname;
 	const timeoutMs = Math.max(1500, Math.min(20_000, timeLeftMs(deadlineMs) - 500));
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -256,7 +272,7 @@ async function fetchOncehubPage(urlOrPath: string, deadlineMs: number): Promise<
 		});
 		if (!response.ok) {
 			const body = await response.text();
-			throw new Error(`OnceHub ${response.status}: ${body.slice(0, 300)}`);
+			throw new Error(`OnceHub ${response.status} (${requestPath}): ${body.slice(0, 300)}`);
 		}
 		const payload = await response.json();
 		const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : [];
