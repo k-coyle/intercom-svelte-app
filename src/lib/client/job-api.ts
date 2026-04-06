@@ -11,6 +11,13 @@ type FetchJobViewOptions = {
 	offset?: number;
 	limit?: number;
 	signal?: AbortSignal;
+	retry?: FetchJobViewRetryOptions;
+};
+
+export type FetchJobViewRetryOptions = {
+	retryNotFound?: boolean;
+	retryNotComplete?: boolean;
+	retryLimit?: number;
 };
 
 const STEP_JOB_NOT_FOUND_RETRY_LIMIT = 20;
@@ -65,8 +72,16 @@ function isStepJobRetryableError(error: unknown, jobId: string): boolean {
 	return isJobNotFoundError(error, jobId);
 }
 
-function isFetchViewRetryableError(error: unknown, jobId: string): boolean {
-	return isJobNotFoundError(error, jobId) || isJobNotCompleteError(error);
+function isFetchViewRetryableError(
+	error: unknown,
+	jobId: string,
+	retry: FetchJobViewRetryOptions | undefined
+): boolean {
+	const retryNotFound = retry?.retryNotFound ?? true;
+	const retryNotComplete = retry?.retryNotComplete ?? true;
+	if (retryNotFound && isJobNotFoundError(error, jobId)) return true;
+	if (retryNotComplete && isJobNotCompleteError(error)) return true;
+	return false;
 }
 
 async function withStepJobRetry<T>(run: () => Promise<T>, jobId: string, signal?: AbortSignal): Promise<T> {
@@ -78,11 +93,16 @@ async function withStepJobRetry<T>(run: () => Promise<T>, jobId: string, signal?
 	});
 }
 
-async function withFetchViewRetry<T>(run: () => Promise<T>, jobId: string, signal?: AbortSignal): Promise<T> {
+async function withFetchViewRetry<T>(
+	run: () => Promise<T>,
+	jobId: string,
+	signal: AbortSignal | undefined,
+	retry: FetchJobViewRetryOptions | undefined
+): Promise<T> {
 	return withRetry({
 		run,
-		shouldRetry: (error) => isFetchViewRetryableError(error, jobId),
-		retryLimit: VIEW_TRANSIENT_RETRY_LIMIT,
+		shouldRetry: (error) => isFetchViewRetryableError(error, jobId, retry),
+		retryLimit: retry?.retryLimit ?? VIEW_TRANSIENT_RETRY_LIMIT,
 		signal
 	});
 }
@@ -176,6 +196,7 @@ export async function fetchJobView<T>(endpoint: string, options: FetchJobViewOpt
 	return withFetchViewRetry(
 		() => fetchJson<T>(url, { signal: options.signal }),
 		options.jobId,
-		options.signal
+		options.signal,
+		options.retry
 	);
 }

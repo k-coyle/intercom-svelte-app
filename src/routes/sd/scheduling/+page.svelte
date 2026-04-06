@@ -414,23 +414,24 @@
 		if (cachedJobId) {
 			try {
 				progressText = `${tag} | reusing cached job ${cachedJobId}...`;
-				const [loadedSummary, rows] = await Promise.all([
-					fetchSdSchedulingView<SchedulingSummary>(
-						cachedJobId,
-						'summary',
-						undefined,
-						undefined,
-						controller.signal
-					),
-					fetchAllSdSchedulingRows<SchedulingRow>({
-						jobId: cachedJobId,
-						limit: 5000,
-						signal: controller.signal,
-						onPage: ({ loaded, total }) => {
-							progressText = `${tag} | loading cached scheduling rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
-						}
-					})
-				]);
+				const failFastRetry = { retryNotFound: false, retryNotComplete: false, retryLimit: 0 };
+				const loadedSummary = await fetchSdSchedulingView<SchedulingSummary>(
+					cachedJobId,
+					'summary',
+					undefined,
+					undefined,
+					controller.signal,
+					failFastRetry
+				);
+				const rows = await fetchAllSdSchedulingRows<SchedulingRow>({
+					jobId: cachedJobId,
+					limit: 5000,
+					signal: controller.signal,
+					retry: failFastRetry,
+					onPage: ({ loaded, total }) => {
+						progressText = `${tag} | loading cached scheduling rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+					}
+				});
 				return { summary: loadedSummary, rows };
 			} catch (err) {
 				if (!isTransientJobFetchError(err)) throw err;
@@ -455,17 +456,21 @@
 				progressText = `${tag} | basis ${dateBasisLabel(progress?.dateBasis ?? selectedDateBasis)} | phase ${progress?.phase ?? 'running'} | pages ${p.oncehubPagesFetched ?? 0} | bookings ${p.rawBookings ?? 0} | contacts ${p.contactsLoaded ?? 0}`;
 			}
 		});
-		const [loadedSummary, rows] = await Promise.all([
-			fetchSdSchedulingView<SchedulingSummary>(jobId, 'summary', undefined, undefined, controller.signal),
-			fetchAllSdSchedulingRows<SchedulingRow>({
-				jobId,
-				limit: 5000,
-				signal: controller.signal,
-				onPage: ({ loaded, total }) => {
-					progressText = `${tag} | loading scheduling rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
-				}
-			})
-		]);
+		const loadedSummary = await fetchSdSchedulingView<SchedulingSummary>(
+			jobId,
+			'summary',
+			undefined,
+			undefined,
+			controller.signal
+		);
+		const rows = await fetchAllSdSchedulingRows<SchedulingRow>({
+			jobId,
+			limit: 5000,
+			signal: controller.signal,
+			onPage: ({ loaded, total }) => {
+				progressText = `${tag} | loading scheduling rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+			}
+		});
 		if (kind === 'primary' && activeJobId === jobId) activeJobId = '';
 		if (kind === 'comparison' && activeComparisonJobId === jobId) activeComparisonJobId = '';
 		return { summary: loadedSummary, rows };
@@ -499,11 +504,10 @@
 		progressText = 'Starting scheduling job...';
 
 		try {
-			const primaryPromise = fetchDatasetForDates(rangeStart, rangeEnd, 'primary');
-			const comparisonPromise = comparisonRange
-				? fetchDatasetForDates(comparisonRange.startDate, comparisonRange.endDate, 'comparison')
-				: Promise.resolve(null);
-			const [primary, comparison] = await Promise.all([primaryPromise, comparisonPromise]);
+			const primary = await fetchDatasetForDates(rangeStart, rangeEnd, 'primary');
+			const comparison = comparisonRange
+				? await fetchDatasetForDates(comparisonRange.startDate, comparisonRange.endDate, 'comparison')
+				: null;
 
 			summary = primary.summary;
 			loadedRows = primary.rows;

@@ -1,5 +1,11 @@
 import { fetchAllPagedViewItems, runJobUntilComplete } from '$lib/client/job-runtime';
-import { cleanupJob, createJob, fetchJobView, stepJob } from '$lib/client/job-api';
+import {
+	cleanupJob,
+	createJob,
+	fetchJobView,
+	stepJob,
+	type FetchJobViewRetryOptions
+} from '$lib/client/job-api';
 
 const ENDPOINT = '/API/sd/scheduling';
 export type SdSchedulingDateBasis = 'session' | 'created';
@@ -38,9 +44,10 @@ export async function fetchSdSchedulingView<T>(
 	view?: 'summary' | 'rows' | 'report',
 	offset?: number,
 	limit?: number,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	retry?: FetchJobViewRetryOptions
 ): Promise<T> {
-	return fetchJobView<T>(ENDPOINT, { jobId, view, offset, limit, signal });
+	return fetchJobView<T>(ENDPOINT, { jobId, view, offset, limit, signal, retry });
 }
 
 export async function runSdSchedulingJobUntilComplete(opts: {
@@ -69,6 +76,7 @@ export async function fetchAllSdSchedulingRows<T>(opts: {
 	jobId: string;
 	limit?: number;
 	signal?: AbortSignal;
+	retry?: FetchJobViewRetryOptions;
 	onPage?: (page: { loaded: number; total: number | null; nextOffset: number | null }) => void;
 }): Promise<T[]> {
 	return fetchAllPagedViewItems<T>({
@@ -76,7 +84,8 @@ export async function fetchAllSdSchedulingRows<T>(opts: {
 		defaultLimit: 1000,
 		maxLimit: 5000,
 		signal: opts.signal,
-		fetchPage: (offset, limit) => fetchSdSchedulingView<any>(opts.jobId, 'rows', offset, limit, opts.signal),
+		fetchPage: (offset, limit) =>
+			fetchSdSchedulingView<any>(opts.jobId, 'rows', offset, limit, opts.signal, opts.retry),
 		onPage: opts.onPage
 	});
 }

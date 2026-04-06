@@ -529,23 +529,24 @@
 		if (cachedJobId) {
 			try {
 				progressText = `${tag} | reusing cached job ${cachedJobId}...`;
-				const [loadedSummary, rows] = await Promise.all([
-					fetchSdEnrollmentsView<EnrollmentSummary>(
-						cachedJobId,
-						'summary',
-						undefined,
-						undefined,
-						controller.signal
-					),
-					fetchAllSdEnrollmentsRows<EnrollmentRow>({
-						jobId: cachedJobId,
-						limit: 5000,
-						signal: controller.signal,
-						onPage: ({ loaded, total }) => {
-							progressText = `${tag} | loading cached enrollment rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
-						}
-					})
-				]);
+				const failFastRetry = { retryNotFound: false, retryNotComplete: false, retryLimit: 0 };
+				const loadedSummary = await fetchSdEnrollmentsView<EnrollmentSummary>(
+					cachedJobId,
+					'summary',
+					undefined,
+					undefined,
+					controller.signal,
+					failFastRetry
+				);
+				const rows = await fetchAllSdEnrollmentsRows<EnrollmentRow>({
+					jobId: cachedJobId,
+					limit: 5000,
+					signal: controller.signal,
+					retry: failFastRetry,
+					onPage: ({ loaded, total }) => {
+						progressText = `${tag} | loading cached enrollment rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+					}
+				});
 				return { summary: loadedSummary, rows };
 			} catch (err) {
 				if (!isTransientJobFetchError(err)) throw err;
@@ -569,17 +570,21 @@
 				progressText = `${tag} | phase ${progress?.phase ?? 'running'} | reg pages ${p.registrationPagesFetched ?? 0} | enr pages ${p.enrolledPagesFetched ?? 0} | contacts ${p.dedupedContacts ?? 0}`;
 			}
 		});
-		const [loadedSummary, rows] = await Promise.all([
-			fetchSdEnrollmentsView<EnrollmentSummary>(jobId, 'summary', undefined, undefined, controller.signal),
-			fetchAllSdEnrollmentsRows<EnrollmentRow>({
-				jobId,
-				limit: 5000,
-				signal: controller.signal,
-				onPage: ({ loaded, total }) => {
-					progressText = `${tag} | loading enrollment rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
-				}
-			})
-		]);
+		const loadedSummary = await fetchSdEnrollmentsView<EnrollmentSummary>(
+			jobId,
+			'summary',
+			undefined,
+			undefined,
+			controller.signal
+		);
+		const rows = await fetchAllSdEnrollmentsRows<EnrollmentRow>({
+			jobId,
+			limit: 5000,
+			signal: controller.signal,
+			onPage: ({ loaded, total }) => {
+				progressText = `${tag} | loading enrollment rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
+			}
+		});
 		if (kind === 'primary' && activePrimaryJobId === jobId) activePrimaryJobId = '';
 		if (kind === 'comparison' && activeComparisonJobId === jobId) activeComparisonJobId = '';
 		return { summary: loadedSummary, rows };
@@ -611,12 +616,10 @@
 		error = null;
 		progressText = 'Starting enrollments job...';
 		try {
-			const primaryPromise = fetchDatasetForDates(rangeStart, rangeEnd, 'primary');
-			const comparisonPromise = comparisonRange
-				? fetchDatasetForDates(comparisonRange.startDate, comparisonRange.endDate, 'comparison')
-				: Promise.resolve(null);
-
-			const [primary, comparison] = await Promise.all([primaryPromise, comparisonPromise]);
+			const primary = await fetchDatasetForDates(rangeStart, rangeEnd, 'primary');
+			const comparison = comparisonRange
+				? await fetchDatasetForDates(comparisonRange.startDate, comparisonRange.endDate, 'comparison')
+				: null;
 			summary = primary.summary;
 			loadedRows = primary.rows;
 			comparisonSummary = comparison?.summary ?? null;

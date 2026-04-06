@@ -9,6 +9,7 @@ import {
 	timeLeftMs
 } from '$lib/server/job-runtime';
 import { createReportLogger } from '$lib/server/report-logger';
+import { getInstanceFingerprint } from '$lib/server/instance-fingerprint';
 import {
 	SD_EMPLOYER_ATTR_KEY,
 	SD_ENROLLED_DATE_ATTR_KEY,
@@ -26,6 +27,7 @@ import {
 const CONTACTS_PER_PAGE = INTERCOM_MAX_PER_PAGE;
 const MAX_LOOKBACK_DAYS = 3650;
 const log = createReportLogger('sd-enrollments');
+const INSTANCE_ID = getInstanceFingerprint();
 
 type JobStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
 type JobPhase = 'registration-contacts' | 'enrolled-contacts' | 'finalize' | 'complete';
@@ -86,7 +88,7 @@ function cleanExpiredJobs(nowMs: number) {
 	for (const [id, job] of jobs.entries()) {
 		if (nowMs - job.updatedAtMs > JOB_TTL_MS) {
 			jobs.delete(id);
-			log.info('job_expired', { jobId: id, ageMs: nowMs - job.updatedAtMs });
+			log.info('job_expired', { jobId: id, ageMs: nowMs - job.updatedAtMs, instanceId: INSTANCE_ID });
 		}
 	}
 }
@@ -182,6 +184,7 @@ function processContactsPage(job: EnrollmentJobState, contacts: any[]) {
 function buildStatusPayload(job: EnrollmentJobState) {
 	return {
 		jobId: job.id,
+		instanceId: INSTANCE_ID,
 		status: job.status,
 		phase: job.phase,
 		done: job.status === 'complete' || job.status === 'error' || job.status === 'cancelled',
@@ -321,13 +324,13 @@ async function stepJob(job: EnrollmentJobState) {
 			return buildStatusPayload(job);
 		}
 		job.status = 'error';
-		job.phase = 'complete';
-		job.error = err?.message ?? String(err);
-		job.updatedAtMs = Date.now();
-		log.error('job_error', { jobId: job.id, message: job.error });
-		return buildStatusPayload(job);
+			job.phase = 'complete';
+			job.error = err?.message ?? String(err);
+			job.updatedAtMs = Date.now();
+			log.error('job_error', { jobId: job.id, message: job.error, instanceId: INSTANCE_ID });
+			return buildStatusPayload(job);
+		}
 	}
-}
 
 function createJob(startDate: string, endDate: string): EnrollmentJobState {
 	const nowMs = Date.now();
@@ -356,7 +359,7 @@ function createJob(startDate: string, endDate: string): EnrollmentJobState {
 		contactsById: new Map()
 	};
 	jobs.set(job.id, job);
-	log.info('job_create', { jobId: job.id, startDate, endDate });
+	log.info('job_create', { jobId: job.id, startDate, endDate, instanceId: INSTANCE_ID });
 	return job;
 }
 
@@ -403,14 +406,14 @@ export const POST: RequestHandler = async ({ request }) => {
 					headers: { 'Content-Type': 'application/json' }
 				});
 			}
-			const job = jobs.get(jobId);
-			if (!job) {
-				log.warn('job_missing', { op: 'step', jobId, jobsSize: jobs.size });
-				return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
-					status: 404,
-					headers: { 'Content-Type': 'application/json' }
-				});
-			}
+				const job = jobs.get(jobId);
+				if (!job) {
+					log.warn('job_missing', { op: 'step', jobId, jobsSize: jobs.size, instanceId: INSTANCE_ID });
+					return new Response(JSON.stringify({ error: 'Job not found', jobId, instanceId: INSTANCE_ID }), {
+						status: 404,
+						headers: { 'Content-Type': 'application/json' }
+					});
+				}
 			if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled') {
 				return new Response(JSON.stringify(buildStatusPayload(job)), {
 					headers: { 'Content-Type': 'application/json' }
@@ -424,14 +427,14 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		if (op === 'cancel') {
 			const jobId = String(body?.jobId ?? '');
-			const job = jobId ? jobs.get(jobId) : null;
-			if (!job) {
-				log.warn('job_missing', { op: 'cancel', jobId, jobsSize: jobs.size });
-				return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
-					status: 404,
-					headers: { 'Content-Type': 'application/json' }
-				});
-			}
+				const job = jobId ? jobs.get(jobId) : null;
+				if (!job) {
+					log.warn('job_missing', { op: 'cancel', jobId, jobsSize: jobs.size, instanceId: INSTANCE_ID });
+					return new Response(JSON.stringify({ error: 'Job not found', jobId, instanceId: INSTANCE_ID }), {
+						status: 404,
+						headers: { 'Content-Type': 'application/json' }
+					});
+				}
 			job.status = 'cancelled';
 			job.phase = 'complete';
 			job.updatedAtMs = Date.now();
@@ -492,9 +495,10 @@ export const GET: RequestHandler = async ({ url }) => {
 			op: 'get',
 			jobId,
 			view: url.searchParams.get('view') ?? null,
-			jobsSize: jobs.size
+			jobsSize: jobs.size,
+			instanceId: INSTANCE_ID
 		});
-		return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
+		return new Response(JSON.stringify({ error: 'Job not found', jobId, instanceId: INSTANCE_ID }), {
 			status: 404,
 			headers: { 'Content-Type': 'application/json' }
 		});

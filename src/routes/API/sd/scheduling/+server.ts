@@ -10,6 +10,7 @@ import {
 	timeLeftMs
 } from '$lib/server/job-runtime';
 import { createReportLogger } from '$lib/server/report-logger';
+import { getInstanceFingerprint } from '$lib/server/instance-fingerprint';
 import { resolveOfflineFixturesEnabled } from '$lib/server/sandbox-mode';
 import { buildSyntheticOncehubBookings } from '$lib/testing/sd-synthetic-data';
 import {
@@ -33,6 +34,7 @@ const ONCEHUB_BASE_PATH_SEGMENT = new URL(ONCEHUB_BASE_URL_WITH_SLASH).pathname.
 const ONCEHUB_PAGE_LIMIT = 100;
 const ONCEHUB_MAX_PAGES = 80;
 const CONTACT_LOOKUP_BATCH = 12;
+const INSTANCE_ID = getInstanceFingerprint();
 
 type JobStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
 type JobPhase = 'bookings' | 'contacts' | 'admins' | 'finalize' | 'complete';
@@ -147,7 +149,7 @@ function cleanExpiredJobs(nowMs: number) {
 	for (const [id, job] of jobs.entries()) {
 		if (nowMs - job.updatedAtMs > JOB_TTL_MS) {
 			jobs.delete(id);
-			log.info('job_expired', { jobId: id, ageMs: nowMs - job.updatedAtMs });
+			log.info('job_expired', { jobId: id, ageMs: nowMs - job.updatedAtMs, instanceId: INSTANCE_ID });
 		}
 	}
 }
@@ -375,6 +377,7 @@ function toRawBookingSeed(raw: any): RawBookingSeed | null {
 function buildStatusPayload(job: SchedulingJobState) {
 	return {
 		jobId: job.id,
+		instanceId: INSTANCE_ID,
 		status: job.status,
 		phase: job.phase,
 		done: job.status === 'complete' || job.status === 'error' || job.status === 'cancelled',
@@ -633,13 +636,13 @@ async function stepJob(job: SchedulingJobState) {
 			return buildStatusPayload(job);
 		}
 		job.status = 'error';
-		job.phase = 'complete';
-		job.error = err?.message ?? String(err);
-		job.updatedAtMs = Date.now();
-		log.error('job_error', { jobId: job.id, message: job.error });
-		return buildStatusPayload(job);
+			job.phase = 'complete';
+			job.error = err?.message ?? String(err);
+			job.updatedAtMs = Date.now();
+			log.error('job_error', { jobId: job.id, message: job.error, instanceId: INSTANCE_ID });
+			return buildStatusPayload(job);
+		}
 	}
-}
 
 function createJob(
 	startDate: string,
@@ -688,7 +691,8 @@ function createJob(
 		offlineMode,
 		oncehubFilterField: job.oncehubFilterField,
 		oncehubFilterStartIso: job.oncehubFilterStartIso,
-		oncehubFilterEndIso: job.oncehubFilterEndIso
+		oncehubFilterEndIso: job.oncehubFilterEndIso,
+		instanceId: INSTANCE_ID
 	});
 	return job;
 }
@@ -737,13 +741,14 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 					headers: { 'Content-Type': 'application/json' }
 				});
 			}
-			const job = jobs.get(jobId);
-			if (!job) {
-				return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
-					status: 404,
-					headers: { 'Content-Type': 'application/json' }
-				});
-			}
+				const job = jobs.get(jobId);
+				if (!job) {
+					log.warn('job_missing', { op: 'step', jobId, jobsSize: jobs.size, instanceId: INSTANCE_ID });
+					return new Response(JSON.stringify({ error: 'Job not found', jobId, instanceId: INSTANCE_ID }), {
+						status: 404,
+						headers: { 'Content-Type': 'application/json' }
+					});
+				}
 			if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled') {
 				return new Response(JSON.stringify(buildStatusPayload(job)), {
 					headers: { 'Content-Type': 'application/json' }
@@ -757,13 +762,14 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 
 		if (op === 'cancel') {
 			const jobId = String(body?.jobId ?? '');
-			const job = jobId ? jobs.get(jobId) : null;
-			if (!job) {
-				return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
-					status: 404,
-					headers: { 'Content-Type': 'application/json' }
-				});
-			}
+				const job = jobId ? jobs.get(jobId) : null;
+				if (!job) {
+					log.warn('job_missing', { op: 'cancel', jobId, jobsSize: jobs.size, instanceId: INSTANCE_ID });
+					return new Response(JSON.stringify({ error: 'Job not found', jobId, instanceId: INSTANCE_ID }), {
+						status: 404,
+						headers: { 'Content-Type': 'application/json' }
+					});
+				}
 			job.status = 'cancelled';
 			job.phase = 'complete';
 			job.updatedAtMs = Date.now();
@@ -819,7 +825,14 @@ export const GET: RequestHandler = async ({ url }) => {
 
 	const job = jobs.get(jobId);
 	if (!job) {
-		return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
+		log.warn('job_missing', {
+			op: 'get',
+			jobId,
+			view: url.searchParams.get('view') ?? null,
+			jobsSize: jobs.size,
+			instanceId: INSTANCE_ID
+		});
+		return new Response(JSON.stringify({ error: 'Job not found', jobId, instanceId: INSTANCE_ID }), {
 			status: 404,
 			headers: { 'Content-Type': 'application/json' }
 		});

@@ -1,5 +1,11 @@
 import { fetchAllPagedViewItems, runJobUntilComplete } from '$lib/client/job-runtime';
-import { cleanupJob, createJob, fetchJobView, stepJob } from '$lib/client/job-api';
+import {
+	cleanupJob,
+	createJob,
+	fetchJobView,
+	stepJob,
+	type FetchJobViewRetryOptions
+} from '$lib/client/job-api';
 
 const ENDPOINT = '/API/sd/coaching-activity';
 
@@ -35,9 +41,10 @@ export async function fetchSdCoachingActivityView<T>(
 	view?: 'summary' | 'rows' | 'report',
 	offset?: number,
 	limit?: number,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	retry?: FetchJobViewRetryOptions
 ): Promise<T> {
-	return fetchJobView<T>(ENDPOINT, { jobId, view, offset, limit, signal });
+	return fetchJobView<T>(ENDPOINT, { jobId, view, offset, limit, signal, retry });
 }
 
 export async function runSdCoachingActivityJobUntilComplete(opts: {
@@ -64,6 +71,7 @@ export async function fetchAllSdCoachingActivityRows<T>(opts: {
 	jobId: string;
 	limit?: number;
 	signal?: AbortSignal;
+	retry?: FetchJobViewRetryOptions;
 	onPage?: (page: { loaded: number; total: number | null; nextOffset: number | null }) => void;
 }): Promise<T[]> {
 	return fetchAllPagedViewItems<T>({
@@ -72,7 +80,7 @@ export async function fetchAllSdCoachingActivityRows<T>(opts: {
 		maxLimit: 5000,
 		signal: opts.signal,
 		fetchPage: (offset, limit) =>
-			fetchSdCoachingActivityView<any>(opts.jobId, 'rows', offset, limit, opts.signal),
+			fetchSdCoachingActivityView<any>(opts.jobId, 'rows', offset, limit, opts.signal, opts.retry),
 		onPage: opts.onPage
 	});
 }
