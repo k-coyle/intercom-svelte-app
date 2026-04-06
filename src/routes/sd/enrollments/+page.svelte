@@ -486,6 +486,15 @@
 		return message.includes('HTTP 404') && message.includes('Job not found');
 	}
 
+	function isJobNotCompleteError(err: unknown): boolean {
+		const message = String((err as any)?.message ?? err ?? '');
+		return message.includes('HTTP 409') && message.includes('Job not complete');
+	}
+
+	function isTransientJobFetchError(err: unknown): boolean {
+		return isJobNotFoundError(err) || isJobNotCompleteError(err);
+	}
+
 	function datasetKey(_startDate: string, endDate: string): string {
 		// The enrollments backend query uses endDate as the retrieval bound.
 		return `end:${endDate}`;
@@ -530,7 +539,7 @@
 					),
 					fetchAllSdEnrollmentsRows<EnrollmentRow>({
 						jobId: cachedJobId,
-						limit: 1000,
+						limit: 5000,
 						signal: controller.signal,
 						onPage: ({ loaded, total }) => {
 							progressText = `${tag} | loading cached enrollment rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
@@ -539,7 +548,7 @@
 				]);
 				return { summary: loadedSummary, rows };
 			} catch (err) {
-				if (!isJobNotFoundError(err)) throw err;
+				if (!isTransientJobFetchError(err)) throw err;
 				jobIdByRangeKey.delete(cacheKey);
 				sessionJobIds.delete(cachedJobId);
 			}
@@ -564,7 +573,7 @@
 			fetchSdEnrollmentsView<EnrollmentSummary>(jobId, 'summary', undefined, undefined, controller.signal),
 			fetchAllSdEnrollmentsRows<EnrollmentRow>({
 				jobId,
-				limit: 1000,
+				limit: 5000,
 				signal: controller.signal,
 				onPage: ({ loaded, total }) => {
 					progressText = `${tag} | loading enrollment rows ${loaded}${total != null ? ` / ${total}` : ''}...`;

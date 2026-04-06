@@ -105,6 +105,10 @@ type SchedulingJobState = {
 	endDate: string;
 	offlineMode: boolean;
 	oncehubNextUrl: string | null;
+	oncehubUseDateFilters: boolean;
+	oncehubFilterField: 'starting_time' | 'creation_time';
+	oncehubFilterStartIso: string;
+	oncehubFilterEndIso: string;
 	oncehubPagesFetched: number;
 	oncehubRowsFetched: number;
 	rawBookings: RawBookingSeed[];
@@ -200,6 +204,43 @@ function absolutizeOncehubUrl(pathOrUrl: string): string {
 	if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
 	const clean = pathOrUrl.startsWith('/') ? pathOrUrl.slice(1) : pathOrUrl;
 	return `${ONCEHUB_BASE_URL}/${clean}`;
+}
+
+function oncehubFilterFieldForDateBasis(dateBasis: DateBasis): 'starting_time' | 'creation_time' {
+	return dateBasis === 'created' ? 'creation_time' : 'starting_time';
+}
+
+function toIsoFromUnix(unix: number): string {
+	return new Date(unix * 1000).toISOString();
+}
+
+function buildInitialOncehubBookingsUrl(job: SchedulingJobState): string {
+	const url = new URL('/bookings', `${ONCEHUB_BASE_URL}/`);
+	url.searchParams.set('limit', String(ONCEHUB_PAGE_LIMIT));
+	if (job.oncehubUseDateFilters) {
+		url.searchParams.set(`${job.oncehubFilterField}.gt`, job.oncehubFilterStartIso);
+		url.searchParams.set(`${job.oncehubFilterField}.lt`, job.oncehubFilterEndIso);
+	}
+	return url.toString();
+}
+
+function isOncehubDateFilterQueryError(err: unknown, job: SchedulingJobState): boolean {
+	if (!job.oncehubUseDateFilters) return false;
+	const message = String((err as any)?.message ?? err ?? '').toLowerCase();
+	if (!message.includes('oncehub 400')) return false;
+	return (
+		message.includes(job.oncehubFilterField) ||
+		message.includes('.gt') ||
+		message.includes('.lt') ||
+		message.includes('query') ||
+		message.includes('parameter')
+	);
+}
+
+function bookingMatchesRequestedWindow(booking: RawBookingSeed, job: SchedulingJobState): boolean {
+	const basisUnix = job.dateBasis === 'created' ? booking.createdUnix : booking.startingUnix;
+	if (basisUnix == null) return false;
+	return basisUnix >= job.startUnix && basisUnix < job.endUnixExclusive;
 }
 
 async function fetchOncehubPage(urlOrPath: string, deadlineMs: number): Promise<{ rows: any[]; nextUrl: string | null }> {
@@ -328,6 +369,8 @@ function buildStatusPayload(job: SchedulingJobState) {
 		progress: {
 			oncehubPagesFetched: job.oncehubPagesFetched,
 			oncehubRowsFetched: job.oncehubRowsFetched,
+			oncehubUseDateFilters: job.oncehubUseDateFilters,
+			oncehubFilterField: job.oncehubFilterField,
 			rawBookings: job.rawBookings.length,
 			memberEmails: job.memberEmails.length,
 			memberEmailIndex: job.memberEmailIndex,
@@ -469,7 +512,8 @@ async function stepJob(job: SchedulingJobState) {
 			if (job.offlineMode) {
 				job.rawBookings = buildSyntheticOncehubBookings(Math.floor(Date.now() / 1000))
 					.map((row) => toRawBookingSeed(row))
-					.filter((row): row is RawBookingSeed => Boolean(row));
+					.filter((row): row is RawBookingSeed => Boolean(row))
+					.filter((row) => bookingMatchesRequestedWindow(row, job));
 				job.oncehubRowsFetched = job.rawBookings.length;
 				job.oncehubPagesFetched = 1;
 				job.memberEmails = [
@@ -488,15 +532,28 @@ async function stepJob(job: SchedulingJobState) {
 						job.phase = 'contacts';
 						break;
 					}
-					const url =
-						job.oncehubNextUrl ??
-						`${ONCEHUB_BASE_URL}/bookings?limit=${ONCEHUB_PAGE_LIMIT}`;
-					const page = await fetchOncehubPage(url, deadlineMs);
+
+					const url = job.oncehubNextUrl ?? buildInitialOncehubBookingsUrl(job);
+					let page: { rows: any[]; nextUrl: string | null };
+					try {
+						page = await fetchOncehubPage(url, deadlineMs);
+					} catch (err) {
+						if (!job.oncehubNextUrl && isOncehubDateFilterQueryError(err, job)) {
+							job.oncehubUseDateFilters = false;
+							log.warn('oncehub_date_filter_fallback', {
+								jobId: job.id,
+								dateBasis: job.dateBasis,
+								filterField: job.oncehubFilterField
+							});
+							continue;
+						}
+						throw err;
+					}
 					job.oncehubPagesFetched += 1;
 					job.oncehubRowsFetched += page.rows.length;
 					for (const raw of page.rows) {
 						const mapped = toRawBookingSeed(raw);
-						if (mapped) job.rawBookings.push(mapped);
+						if (mapped && bookingMatchesRequestedWindow(mapped, job)) job.rawBookings.push(mapped);
 					}
 					job.oncehubNextUrl = page.nextUrl;
 					if (!page.nextUrl) {
@@ -594,6 +651,10 @@ function createJob(
 		endDate,
 		offlineMode,
 		oncehubNextUrl: null,
+		oncehubUseDateFilters: true,
+		oncehubFilterField: oncehubFilterFieldForDateBasis(dateBasis),
+		oncehubFilterStartIso: toIsoFromUnix(Math.max(0, startUnix - 1)),
+		oncehubFilterEndIso: toIsoFromUnix(endUnixExclusive),
 		oncehubPagesFetched: 0,
 		oncehubRowsFetched: 0,
 		rawBookings: [],
@@ -603,7 +664,16 @@ function createJob(
 		adminByEmail: new Map()
 	};
 	jobs.set(job.id, job);
-	log.info('job_create', { jobId: job.id, startDate, endDate, dateBasis, offlineMode });
+	log.info('job_create', {
+		jobId: job.id,
+		startDate,
+		endDate,
+		dateBasis,
+		offlineMode,
+		oncehubFilterField: job.oncehubFilterField,
+		oncehubFilterStartIso: job.oncehubFilterStartIso,
+		oncehubFilterEndIso: job.oncehubFilterEndIso
+	});
 	return job;
 }
 

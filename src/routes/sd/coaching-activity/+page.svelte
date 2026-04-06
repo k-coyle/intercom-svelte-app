@@ -524,6 +524,15 @@
 		return message.includes('HTTP 404') && message.includes('Job not found');
 	}
 
+	function isJobNotCompleteError(err: unknown): boolean {
+		const message = String((err as any)?.message ?? err ?? '');
+		return message.includes('HTTP 409') && message.includes('Job not complete');
+	}
+
+	function isTransientJobFetchError(err: unknown): boolean {
+		return isJobNotFoundError(err) || isJobNotCompleteError(err);
+	}
+
 	function datasetKey(startDate: string, endDate: string): string {
 		return `${startDate}..${endDate}`;
 	}
@@ -567,7 +576,7 @@
 					),
 					fetchAllSdCoachingActivityRows<CoachingRow>({
 						jobId: cachedJobId,
-						limit: 1000,
+						limit: 5000,
 						signal: controller.signal,
 						onPage: ({ loaded, total }) => {
 							progressText = `${tag} | loading cached coaching rows ${loaded}${total != null ? ` / ${total}` : ''}...`;
@@ -576,7 +585,7 @@
 				]);
 				return { summary: loadedSummary, rows };
 			} catch (err) {
-				if (!isJobNotFoundError(err)) throw err;
+				if (!isTransientJobFetchError(err)) throw err;
 				jobIdByRangeKey.delete(cacheKey);
 				sessionJobIds.delete(cachedJobId);
 			}
@@ -608,7 +617,7 @@
 			),
 			fetchAllSdCoachingActivityRows<CoachingRow>({
 				jobId,
-				limit: 1000,
+				limit: 5000,
 				signal: controller.signal,
 				onPage: ({ loaded, total }) => {
 					progressText = `${tag} | loading coaching rows ${loaded}${total != null ? ` / ${total}` : ''}...`;

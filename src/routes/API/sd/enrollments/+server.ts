@@ -405,6 +405,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			}
 			const job = jobs.get(jobId);
 			if (!job) {
+				log.warn('job_missing', { op: 'step', jobId, jobsSize: jobs.size });
 				return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
 					status: 404,
 					headers: { 'Content-Type': 'application/json' }
@@ -425,6 +426,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			const jobId = String(body?.jobId ?? '');
 			const job = jobId ? jobs.get(jobId) : null;
 			if (!job) {
+				log.warn('job_missing', { op: 'cancel', jobId, jobsSize: jobs.size });
 				return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
 					status: 404,
 					headers: { 'Content-Type': 'application/json' }
@@ -486,6 +488,12 @@ export const GET: RequestHandler = async ({ url }) => {
 
 	const job = jobs.get(jobId);
 	if (!job) {
+		log.warn('job_missing', {
+			op: 'get',
+			jobId,
+			view: url.searchParams.get('view') ?? null,
+			jobsSize: jobs.size
+		});
 		return new Response(JSON.stringify({ error: 'Job not found', jobId }), {
 			status: 404,
 			headers: { 'Content-Type': 'application/json' }

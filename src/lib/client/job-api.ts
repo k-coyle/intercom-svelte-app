@@ -13,12 +13,78 @@ type FetchJobViewOptions = {
 	signal?: AbortSignal;
 };
 
-const JOB_NOT_FOUND_RETRY_LIMIT = 8;
-const JOB_NOT_FOUND_RETRY_DELAY_MS = 200;
+const STEP_JOB_NOT_FOUND_RETRY_LIMIT = 20;
+const VIEW_TRANSIENT_RETRY_LIMIT = 30;
+const JOB_RETRY_BASE_DELAY_MS = 125;
+const JOB_RETRY_MAX_DELAY_MS = 2_000;
 
-function isJobNotFoundError(error: unknown, jobId: string): boolean {
-	const message = String((error as any)?.message ?? error ?? '');
-	return message.includes('HTTP 404') && message.includes('Job not found') && message.includes(jobId);
+function errorMessage(error: unknown): string {
+	return String((error as any)?.message ?? error ?? '');
+}
+
+function isJobNotFoundError(error: unknown, jobId?: string): boolean {
+	const message = errorMessage(error);
+	const isNotFound = message.includes('HTTP 404') && message.includes('Job not found');
+	if (!isNotFound) return false;
+	if (!jobId) return true;
+	return message.includes(jobId) || !message.includes('jobId');
+}
+
+function isJobNotCompleteError(error: unknown): boolean {
+	const message = errorMessage(error);
+	return message.includes('HTTP 409') && message.includes('Job not complete');
+}
+
+function retryDelayMs(attempt: number): number {
+	const exp = JOB_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1);
+	return Math.min(JOB_RETRY_MAX_DELAY_MS, exp);
+}
+
+async function withRetry<T>(opts: {
+	run: () => Promise<T>;
+	shouldRetry: (error: unknown) => boolean;
+	retryLimit: number;
+	signal?: AbortSignal;
+}): Promise<T> {
+	let attempt = 0;
+	while (true) {
+		if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+		try {
+			return await opts.run();
+		} catch (error) {
+			if (!opts.shouldRetry(error) || attempt >= opts.retryLimit) {
+				throw error;
+			}
+			attempt += 1;
+			await waitWithAbort(retryDelayMs(attempt), opts.signal);
+		}
+	}
+}
+
+function isStepJobRetryableError(error: unknown, jobId: string): boolean {
+	return isJobNotFoundError(error, jobId);
+}
+
+function isFetchViewRetryableError(error: unknown, jobId: string): boolean {
+	return isJobNotFoundError(error, jobId) || isJobNotCompleteError(error);
+}
+
+async function withStepJobRetry<T>(run: () => Promise<T>, jobId: string, signal?: AbortSignal): Promise<T> {
+	return withRetry({
+		run,
+		shouldRetry: (error) => isStepJobRetryableError(error, jobId),
+		retryLimit: STEP_JOB_NOT_FOUND_RETRY_LIMIT,
+		signal
+	});
+}
+
+async function withFetchViewRetry<T>(run: () => Promise<T>, jobId: string, signal?: AbortSignal): Promise<T> {
+	return withRetry({
+		run,
+		shouldRetry: (error) => isFetchViewRetryableError(error, jobId),
+		retryLimit: VIEW_TRANSIENT_RETRY_LIMIT,
+		signal
+	});
 }
 
 async function waitWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
@@ -42,26 +108,6 @@ async function waitWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
-async function withJobNotFoundRetry<T>(
-	run: () => Promise<T>,
-	jobId: string,
-	signal?: AbortSignal
-): Promise<T> {
-	let attempt = 0;
-	while (true) {
-		if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-		try {
-			return await run();
-		} catch (error) {
-			if (!isJobNotFoundError(error, jobId) || attempt >= JOB_NOT_FOUND_RETRY_LIMIT) {
-				throw error;
-			}
-			attempt += 1;
-			await waitWithAbort(JOB_NOT_FOUND_RETRY_DELAY_MS * attempt, signal);
-		}
-	}
-}
-
 export async function createJob(
 	endpoint: string,
 	body: Record<string, unknown>,
@@ -82,7 +128,7 @@ export async function createJob(
 }
 
 export async function stepJob(endpoint: string, jobId: string, signal?: AbortSignal): Promise<any> {
-	return withJobNotFoundRetry(
+	return withStepJobRetry(
 		() =>
 			fetchJson<any>(endpoint, {
 				method: 'POST',
@@ -127,7 +173,7 @@ export async function fetchJobView<T>(endpoint: string, options: FetchJobViewOpt
 	if (options.limit != null) params.set('limit', String(options.limit));
 
 	const url = `${endpoint}?${params.toString()}`;
-	return withJobNotFoundRetry(
+	return withFetchViewRetry(
 		() => fetchJson<T>(url, { signal: options.signal }),
 		options.jobId,
 		options.signal
