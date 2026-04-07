@@ -5,12 +5,13 @@
 	export let title = '';
 	export let expandedTitle = '';
 	export let dates: string[] = [];
-	export let series: Array<{ name: string; values: number[] }> = [];
+	export let series: Array<{ name: string; values: Array<number | null> }> = [];
 	export let xAxisLabel = 'Date';
 	export let yAxisLabel = 'Count';
 	export let emptyText = 'No data available for the selected filters.';
 	export let activeFilters: string[] = [];
 	export let expandable = true;
+	export let defaultVisibleCount = 5;
 
 	type Dims = {
 		svgWidth: number;
@@ -19,6 +20,12 @@
 		paddingRight: number;
 		paddingTop: number;
 		paddingBottom: number;
+	};
+
+	type RankedSeries = {
+		name: string;
+		values: Array<number | null>;
+		total: number;
 	};
 
 	const INLINE_DIMS: Dims = {
@@ -53,6 +60,8 @@
 	];
 
 	let expandedOpen = false;
+	let selectedSeriesNames: string[] = [];
+	let seriesSignature = '';
 
 	function colorAt(index: number): string {
 		return PALETTE[index % PALETTE.length];
@@ -66,9 +75,10 @@
 		return dims.svgHeight - dims.paddingTop - dims.paddingBottom;
 	}
 
-	function safeNumber(value: unknown): number {
+	function normalizedValue(value: unknown): number | null {
+		if (value == null) return null;
 		const n = Number(value);
-		if (!Number.isFinite(n) || n < 0) return 0;
+		if (!Number.isFinite(n) || n < 0) return null;
 		return n;
 	}
 
@@ -99,24 +109,99 @@
 		return out;
 	}
 
+	function buildYTicks(maxValue: number): number[] {
+		return [0, Math.round(maxValue * 0.25), Math.round(maxValue * 0.5), Math.round(maxValue * 0.75), maxValue];
+	}
+
+	function totalDefined(values: Array<number | null>): number {
+		return values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+	}
+
+	function maxDefinedValues(entries: RankedSeries[]): number {
+		const numbers = entries.flatMap((entry) => entry.values).filter((value): value is number => value != null);
+		return Math.max(0, ...numbers);
+	}
+
+	function polylineSegments(values: Array<number | null>, maxValue: number, dims: Dims): string[] {
+		const segments: string[] = [];
+		let current: string[] = [];
+		for (let index = 0; index < values.length; index += 1) {
+			const value = values[index];
+			if (value == null) {
+				if (current.length > 1) segments.push(current.join(' '));
+				current = [];
+				continue;
+			}
+			current.push(`${xAt(index, pointCount, dims)},${yAt(value, maxValue, dims)}`);
+		}
+		if (current.length > 1) segments.push(current.join(' '));
+		return segments;
+	}
+
+	function setSeriesSelected(name: string, selected: boolean): void {
+		if (selected) {
+			selectedSeriesNames = rankedSeries
+				.map((entry) => entry.name)
+				.filter((entryName) => entryName === name || selectedSeriesNames.includes(entryName));
+			return;
+		}
+
+		const next = selectedSeriesNames.filter((entryName) => entryName !== name);
+		if (next.length === 0) return;
+		selectedSeriesNames = next;
+	}
+
+	function selectTopCategories(): void {
+		selectedSeriesNames = rankedSeries.slice(0, defaultVisibleCount).map((entry) => entry.name);
+	}
+
+	function selectAllCategories(): void {
+		selectedSeriesNames = rankedSeries.map((entry) => entry.name);
+	}
+
 	function openExpanded() {
 		if (!expandable) return;
 		expandedOpen = true;
 	}
 
 	$: pointCount = dates.length;
-	$: sanitizedSeries = series
-		.map((entry) => ({
-			name: entry.name,
-			values: dates.map((_, index) => safeNumber(entry.values[index] ?? 0))
-		}))
-		.filter((entry) => entry.values.length > 0);
-	$: maxValue = Math.max(0, ...sanitizedSeries.flatMap((entry) => entry.values));
-	$: yTicks = [0, Math.round(maxValue * 0.25), Math.round(maxValue * 0.5), Math.round(maxValue * 0.75), maxValue];
+	$: rankedSeries = series
+		.map((entry) => {
+			const values = dates.map((_, index) => normalizedValue(entry.values[index]));
+			return {
+				name: entry.name,
+				values,
+				total: totalDefined(values)
+			} satisfies RankedSeries;
+		})
+		.filter((entry) => entry.values.some((value) => value != null))
+		.sort((a, b) => {
+			if (b.total !== a.total) return b.total - a.total;
+			return a.name.localeCompare(b.name);
+		});
+	$: visibleInlineSeries = rankedSeries.slice(0, defaultVisibleCount);
+	$: hasHiddenSeries = rankedSeries.length > visibleInlineSeries.length;
+	$: nextSeriesSignature = rankedSeries.map((entry) => entry.name).join('\u0000');
+	$: if (nextSeriesSignature !== seriesSignature) {
+		const available = new Set(rankedSeries.map((entry) => entry.name));
+		const retained = selectedSeriesNames.filter((name) => available.has(name));
+		selectedSeriesNames =
+			retained.length > 0
+				? rankedSeries.map((entry) => entry.name).filter((name) => retained.includes(name))
+				: visibleInlineSeries.map((entry) => entry.name);
+		seriesSignature = nextSeriesSignature;
+	}
+	$: selectedSeriesSet = new Set(selectedSeriesNames);
+	$: visibleExpandedSeries = rankedSeries.filter((entry) => selectedSeriesSet.has(entry.name));
+	$: inlineMaxValue = maxDefinedValues(visibleInlineSeries);
+	$: expandedMaxValue = maxDefinedValues(visibleExpandedSeries);
+	$: inlineYTicks = buildYTicks(inlineMaxValue);
+	$: expandedYTicks = buildYTicks(expandedMaxValue);
 	$: inlineXTicks = xTickIndices(dates.length, 12);
 	$: expandedXTicks = xTickIndices(dates.length, 28);
-	$: hasData = dates.length > 0 && sanitizedSeries.length > 0;
+	$: hasData = dates.length > 0 && rankedSeries.length > 0;
 	$: resolvedExpandedTitle = expandedTitle || title || 'Chart';
+	$: colorBySeries = new Map(rankedSeries.map((entry, index) => [entry.name, colorAt(index)]));
 </script>
 
 <div class="space-y-3">
@@ -151,7 +236,7 @@
 				onclick={openExpanded}
 				disabled={!expandable}
 			>
-				<div class="rounded-md bg-background p-2">
+				<div class="bg-background p-2">
 					<svg
 						viewBox={`0 0 ${INLINE_DIMS.svgWidth} ${INLINE_DIMS.svgHeight}`}
 						class="h-[260px] w-full"
@@ -175,19 +260,19 @@
 							stroke-width="1"
 						/>
 
-						{#each yTicks as tick}
+						{#each inlineYTicks as tick}
 							<line
 								x1={INLINE_DIMS.paddingLeft}
-								y1={yAt(tick, maxValue, INLINE_DIMS)}
+								y1={yAt(tick, inlineMaxValue, INLINE_DIMS)}
 								x2={INLINE_DIMS.paddingLeft + plotWidth(INLINE_DIMS)}
-								y2={yAt(tick, maxValue, INLINE_DIMS)}
+								y2={yAt(tick, inlineMaxValue, INLINE_DIMS)}
 								stroke="hsl(var(--border))"
 								stroke-width="0.6"
 								stroke-dasharray="3 3"
 							/>
 							<text
 								x={INLINE_DIMS.paddingLeft - 6}
-								y={yAt(tick, maxValue, INLINE_DIMS) + 4}
+								y={yAt(tick, inlineMaxValue, INLINE_DIMS) + 4}
 								text-anchor="end"
 								font-size="10"
 								fill="hsl(var(--muted-foreground))"
@@ -196,27 +281,33 @@
 							</text>
 						{/each}
 
-						{#each sanitizedSeries as entry, entryIndex}
-							{@const points = entry.values
-								.map((value, valueIndex) => `${xAt(valueIndex, pointCount, INLINE_DIMS)},${yAt(value, maxValue, INLINE_DIMS)}`)
-								.join(' ')}
-							<polyline fill="none" stroke={colorAt(entryIndex)} stroke-width="2" points={points} />
-							{#each entry.values as value, valueIndex}
-								<circle
-									cx={xAt(valueIndex, pointCount, INLINE_DIMS)}
-									cy={yAt(value, maxValue, INLINE_DIMS)}
-									r="3"
-									fill={colorAt(entryIndex)}
+						{#each visibleInlineSeries as entry}
+							{#each polylineSegments(entry.values, inlineMaxValue, INLINE_DIMS) as points}
+								<polyline
+									fill="none"
+									stroke={colorBySeries.get(entry.name) ?? colorAt(0)}
+									stroke-width="2"
+									points={points}
 								/>
-								<text
-									x={xAt(valueIndex, pointCount, INLINE_DIMS)}
-									y={yAt(value, maxValue, INLINE_DIMS) - 7}
-									font-size="9"
-									text-anchor="middle"
-									fill={colorAt(entryIndex)}
-								>
-									{value}
-								</text>
+							{/each}
+							{#each entry.values as value, valueIndex}
+								{#if value != null}
+									<circle
+										cx={xAt(valueIndex, pointCount, INLINE_DIMS)}
+										cy={yAt(value, inlineMaxValue, INLINE_DIMS)}
+										r="3"
+										fill={colorBySeries.get(entry.name) ?? colorAt(0)}
+									/>
+									<text
+										x={xAt(valueIndex, pointCount, INLINE_DIMS)}
+										y={yAt(value, inlineMaxValue, INLINE_DIMS) - 7}
+										font-size="9"
+										text-anchor="middle"
+										fill={colorBySeries.get(entry.name) ?? colorAt(0)}
+									>
+										{value}
+									</text>
+								{/if}
 							{/each}
 						{/each}
 
@@ -236,12 +327,18 @@
 				</div>
 			</button>
 
+			{#if hasHiddenSeries}
+				<p class="text-xs text-muted-foreground">
+					Showing top {visibleInlineSeries.length} of {rankedSeries.length} categories. Expand to choose more.
+				</p>
+			{/if}
+
 			<div class="flex flex-wrap gap-2 text-xs">
-				{#each sanitizedSeries as entry, entryIndex}
+				{#each visibleInlineSeries as entry}
 					<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5">
 						<span
 							class="inline-block size-2 rounded-full"
-							style={`background-color: ${colorAt(entryIndex)};`}
+							style={`background-color: ${colorBySeries.get(entry.name) ?? colorAt(0)};`}
 						></span>
 						{entry.name}
 					</span>
@@ -266,114 +363,171 @@
 							{/each}
 						</div>
 					{/if}
-					<div class="flex flex-1 items-center justify-center">
-						<svg
-							viewBox={`0 0 ${EXPANDED_DIMS.svgWidth} ${EXPANDED_DIMS.svgHeight}`}
-							class="h-[74vh] w-full max-w-[1400px]"
-						>
-							<title>{title || 'Line chart'}</title>
-							<desc>{`${yAxisLabel} by ${xAxisLabel}`}</desc>
-							<line
-								x1={EXPANDED_DIMS.paddingLeft}
-								y1={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS)}
-								x2={EXPANDED_DIMS.paddingLeft + plotWidth(EXPANDED_DIMS)}
-								y2={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS)}
-								stroke="hsl(var(--border))"
-								stroke-width="1"
-							/>
-							<line
-								x1={EXPANDED_DIMS.paddingLeft}
-								y1={EXPANDED_DIMS.paddingTop}
-								x2={EXPANDED_DIMS.paddingLeft}
-								y2={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS)}
-								stroke="hsl(var(--border))"
-								stroke-width="1"
-							/>
-
-							{#each yTicks as tick}
+					<div class="rounded-md border bg-muted/20 p-3">
+						<div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+							<span>Showing {visibleExpandedSeries.length} of {rankedSeries.length} categories.</span>
+							{#if hasHiddenSeries}
+								<div class="flex items-center gap-2">
+									<button
+										type="button"
+										class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
+										onclick={selectTopCategories}
+									>
+										Top {defaultVisibleCount}
+									</button>
+									<button
+										type="button"
+										class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
+										onclick={selectAllCategories}
+									>
+										All Categories
+									</button>
+								</div>
+							{/if}
+						</div>
+						{#if hasHiddenSeries}
+							<div class="mt-3 grid max-h-40 gap-2 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
+								{#each rankedSeries as entry}
+									<label class="flex items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs">
+										<input
+											type="checkbox"
+											checked={selectedSeriesNames.includes(entry.name)}
+											onchange={(event) =>
+												setSeriesSelected(
+													entry.name,
+													(event.currentTarget as HTMLInputElement).checked
+												)}
+										/>
+										<span
+											class="inline-block size-2 rounded-full"
+											style={`background-color: ${colorBySeries.get(entry.name) ?? colorAt(0)};`}
+										></span>
+										<span class="truncate">{entry.name}</span>
+									</label>
+								{/each}
+							</div>
+						{/if}
+					</div>
+					{#if visibleExpandedSeries.length === 0}
+						<div class="flex h-[220px] items-center justify-center rounded-md bg-muted/30 text-sm text-muted-foreground">
+							Select at least one category to display the chart.
+						</div>
+					{:else}
+						<div class="flex flex-1 items-center justify-center">
+							<svg
+								viewBox={`0 0 ${EXPANDED_DIMS.svgWidth} ${EXPANDED_DIMS.svgHeight}`}
+								class="h-[74vh] w-full max-w-[1400px]"
+							>
+								<title>{title || 'Line chart'}</title>
+								<desc>{`${yAxisLabel} by ${xAxisLabel}`}</desc>
 								<line
 									x1={EXPANDED_DIMS.paddingLeft}
-									y1={yAt(tick, maxValue, EXPANDED_DIMS)}
+									y1={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS)}
 									x2={EXPANDED_DIMS.paddingLeft + plotWidth(EXPANDED_DIMS)}
-									y2={yAt(tick, maxValue, EXPANDED_DIMS)}
+									y2={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS)}
 									stroke="hsl(var(--border))"
-									stroke-width="0.7"
-									stroke-dasharray="4 3"
+									stroke-width="1"
 								/>
-								<text
-									x={EXPANDED_DIMS.paddingLeft - 8}
-									y={yAt(tick, maxValue, EXPANDED_DIMS) + 5}
-									text-anchor="end"
-									font-size="12"
-									fill="hsl(var(--muted-foreground))"
-								>
-									{tick}
-								</text>
-							{/each}
+								<line
+									x1={EXPANDED_DIMS.paddingLeft}
+									y1={EXPANDED_DIMS.paddingTop}
+									x2={EXPANDED_DIMS.paddingLeft}
+									y2={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS)}
+									stroke="hsl(var(--border))"
+									stroke-width="1"
+								/>
 
-							{#each sanitizedSeries as entry, entryIndex}
-								{@const points = entry.values
-									.map((value, valueIndex) => `${xAt(valueIndex, pointCount, EXPANDED_DIMS)},${yAt(value, maxValue, EXPANDED_DIMS)}`)
-									.join(' ')}
-								<polyline fill="none" stroke={colorAt(entryIndex)} stroke-width="2.5" points={points} />
-								{#each entry.values as value, valueIndex}
-									<circle
-										cx={xAt(valueIndex, pointCount, EXPANDED_DIMS)}
-										cy={yAt(value, maxValue, EXPANDED_DIMS)}
-										r="3.6"
-										fill={colorAt(entryIndex)}
+								{#each expandedYTicks as tick}
+									<line
+										x1={EXPANDED_DIMS.paddingLeft}
+										y1={yAt(tick, expandedMaxValue, EXPANDED_DIMS)}
+										x2={EXPANDED_DIMS.paddingLeft + plotWidth(EXPANDED_DIMS)}
+										y2={yAt(tick, expandedMaxValue, EXPANDED_DIMS)}
+										stroke="hsl(var(--border))"
+										stroke-width="0.7"
+										stroke-dasharray="4 3"
 									/>
 									<text
-										x={xAt(valueIndex, pointCount, EXPANDED_DIMS)}
-										y={yAt(value, maxValue, EXPANDED_DIMS) - 9}
-										font-size="10.5"
-										text-anchor="middle"
-										fill={colorAt(entryIndex)}
+										x={EXPANDED_DIMS.paddingLeft - 8}
+										y={yAt(tick, expandedMaxValue, EXPANDED_DIMS) + 5}
+										text-anchor="end"
+										font-size="12"
+										fill="hsl(var(--muted-foreground))"
 									>
-										{value}
+										{tick}
 									</text>
 								{/each}
-							{/each}
 
-							{#each expandedXTicks as idx}
+								{#each visibleExpandedSeries as entry}
+									{#each polylineSegments(entry.values, expandedMaxValue, EXPANDED_DIMS) as points}
+										<polyline
+											fill="none"
+											stroke={colorBySeries.get(entry.name) ?? colorAt(0)}
+											stroke-width="2.5"
+											points={points}
+										/>
+									{/each}
+									{#each entry.values as value, valueIndex}
+										{#if value != null}
+											<circle
+												cx={xAt(valueIndex, pointCount, EXPANDED_DIMS)}
+												cy={yAt(value, expandedMaxValue, EXPANDED_DIMS)}
+												r="3.6"
+												fill={colorBySeries.get(entry.name) ?? colorAt(0)}
+											/>
+											<text
+												x={xAt(valueIndex, pointCount, EXPANDED_DIMS)}
+												y={yAt(value, expandedMaxValue, EXPANDED_DIMS) - 9}
+												font-size="10.5"
+												text-anchor="middle"
+												fill={colorBySeries.get(entry.name) ?? colorAt(0)}
+											>
+												{value}
+											</text>
+										{/if}
+									{/each}
+								{/each}
+
+								{#each expandedXTicks as idx}
+									<text
+										x={xAt(idx, pointCount, EXPANDED_DIMS)}
+										y={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS) + 36}
+										text-anchor="end"
+										font-size="11.5"
+										fill="hsl(var(--muted-foreground))"
+										transform={`rotate(-40 ${xAt(idx, pointCount, EXPANDED_DIMS)} ${EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS) + 36})`}
+									>
+										{formatDateLabel(dates[idx])}
+									</text>
+								{/each}
 								<text
-									x={xAt(idx, pointCount, EXPANDED_DIMS)}
-									y={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS) + 36}
-									text-anchor="end"
-									font-size="11.5"
+									x={EXPANDED_DIMS.paddingLeft + plotWidth(EXPANDED_DIMS) / 2}
+									y={EXPANDED_DIMS.svgHeight - 10}
+									text-anchor="middle"
+									font-size="13"
 									fill="hsl(var(--muted-foreground))"
-									transform={`rotate(-40 ${xAt(idx, pointCount, EXPANDED_DIMS)} ${EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS) + 36})`}
 								>
-									{formatDateLabel(dates[idx])}
+									{xAxisLabel}
 								</text>
-							{/each}
-							<text
-								x={EXPANDED_DIMS.paddingLeft + plotWidth(EXPANDED_DIMS) / 2}
-								y={EXPANDED_DIMS.svgHeight - 10}
-								text-anchor="middle"
-								font-size="13"
-								fill="hsl(var(--muted-foreground))"
-							>
-								{xAxisLabel}
-							</text>
-							<text
-								x={18}
-								y={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS) / 2}
-								font-size="13"
-								fill="hsl(var(--muted-foreground))"
-								transform={`rotate(-90 18 ${EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS) / 2})`}
-								text-anchor="middle"
-							>
-								{yAxisLabel}
-							</text>
-						</svg>
-					</div>
+								<text
+									x={18}
+									y={EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS) / 2}
+									font-size="13"
+									fill="hsl(var(--muted-foreground))"
+									transform={`rotate(-90 18 ${EXPANDED_DIMS.paddingTop + plotHeight(EXPANDED_DIMS) / 2})`}
+									text-anchor="middle"
+								>
+									{yAxisLabel}
+								</text>
+							</svg>
+						</div>
+					{/if}
 					<div class="flex flex-wrap gap-2 text-xs">
-						{#each sanitizedSeries as entry, entryIndex}
+						{#each visibleExpandedSeries as entry}
 							<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5">
 								<span
 									class="inline-block size-2 rounded-full"
-									style={`background-color: ${colorAt(entryIndex)};`}
+									style={`background-color: ${colorBySeries.get(entry.name) ?? colorAt(0)};`}
 								></span>
 								{entry.name}
 							</span>

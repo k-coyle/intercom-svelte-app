@@ -94,6 +94,9 @@
 	];
 	const RUN_BUTTON_CLASS = 'bg-red-700 text-white hover:bg-red-600 border-red-700';
 	const EXPORT_BUTTON_CLASS = 'border-green-700 text-green-700 hover:bg-green-50';
+	const COMPARISON_ENABLED_BUTTON_CLASS = 'w-full bg-blue-900 text-white hover:bg-blue-800 border-blue-900';
+	const COMPARISON_DISABLED_BUTTON_CLASS =
+		'w-full border-blue-300 text-blue-900 hover:bg-blue-50';
 
 	const DEFAULT_STATUS_OPTIONS = ['scheduled', 'completed', 'no_show', 'rescheduled', 'canceled'];
 
@@ -237,6 +240,13 @@
 
 		if (comparisonStart !== previous.startDate || comparisonEnd !== previous.endDate) {
 			comparisonMode = 'custom';
+		}
+	}
+
+	function toggleComparison(): void {
+		comparisonEnabled = !comparisonEnabled;
+		if (comparisonEnabled) {
+			syncComparisonInputsForPreviousMode(true);
 		}
 	}
 
@@ -543,6 +553,7 @@
 	let heatmapSessions: Array<{ startingUnix: number; status: SchedulingRow['status'] }> = [];
 	let chipItems: FilterChip[] = [];
 	let modalFilterLabels: string[] = [];
+	let hasFilterData = false;
 
 	$: {
 		const nextSignature = comparisonSignature();
@@ -592,11 +603,12 @@
 		comparisonMissedCount = comparisonRows.filter(
 			(row) => row.status === 'rescheduled' || row.status === 'no_show'
 		).length;
-		table = tableRows(rows);
-		heatmapSessions = rows.map((row) => ({ startingUnix: row.startingUnix, status: row.status }));
-		chipItems = buildFilterChips();
-		modalFilterLabels = chipItems.map((chip) => chip.label);
-	}
+			table = tableRows(rows);
+			heatmapSessions = rows.map((row) => ({ startingUnix: row.startingUnix, status: row.status }));
+			chipItems = buildFilterChips();
+			modalFilterLabels = chipItems.map((chip) => chip.label);
+			hasFilterData = loadedRows.length > 0;
+		}
 
 	$: syncComparisonInputsForPreviousMode();
 
@@ -629,11 +641,11 @@
 		<Card.Header class="pb-3">
 			<Card.Title class="text-base">Scheduling Filters</Card.Title>
 		</Card.Header>
-		<Card.Content class="space-y-4">
-			<div class="grid gap-3 md:grid-cols-6">
-				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="rangeStart">Reporting Start</label>
-					<Input
+			<Card.Content class="space-y-4">
+				<div class="grid gap-3 md:grid-cols-4">
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="rangeStart">Reporting Start</label>
+						<Input
 						id="rangeStart"
 						type="date"
 						bind:value={rangeStart}
@@ -657,69 +669,28 @@
 						bind:value={selectedDateBasis}
 						disabled={loading}
 					>
-						{#each DATE_BASIS_OPTIONS as option}
-							<option value={option.value}>{option.label}</option>
-						{/each}
-					</select>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Program</p>
-					<MultiSelectDropdown
-						placeholder="All programs"
-						options={programOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedPrograms}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Employer</p>
-					<MultiSelectDropdown
-						placeholder="All employers"
-						options={employerOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedEmployers}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Coach</p>
-					<MultiSelectDropdown
-						placeholder="All coaches"
-						options={coachOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedCoaches}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-			</div>
-
-			<div class="grid gap-3 md:grid-cols-3">
-				<div class="space-y-1 md:col-span-2">
-					<p class="text-xs font-medium text-muted-foreground">Status</p>
-					<MultiSelectDropdown
-						placeholder="All statuses"
-						options={statusOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedStatuses}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-			</div>
-
-			<div class="grid gap-3 md:grid-cols-4">
-				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="comparisonEnabled">Comparison</label>
-					<label class="inline-flex h-10 w-full items-center gap-2 rounded-md border border-input bg-background px-3 text-sm">
-						<input
-							id="comparisonEnabled"
-							type="checkbox"
-							class="size-4"
-							bind:checked={comparisonEnabled}
-							disabled={loading}
-							onchange={() => syncComparisonInputsForPreviousMode(true)}
-						/>
-						<span>{comparisonEnabled ? 'Enabled' : 'Disabled'}</span>
-					</label>
-				</div>
-				{#if comparisonEnabled}
+							{#each DATE_BASIS_OPTIONS as option}
+								<option value={option.value}>{option.label}</option>
+							{/each}
+						</select>
+					</div>
 					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="comparisonToggle">Comparison</label>
+						<Button
+							id="comparisonToggle"
+							type="button"
+							variant={comparisonEnabled ? 'default' : 'outline'}
+							class={comparisonEnabled
+								? COMPARISON_ENABLED_BUTTON_CLASS
+								: COMPARISON_DISABLED_BUTTON_CLASS}
+							onclick={toggleComparison}
+							disabled={loading}
+						>
+							{comparisonEnabled ? 'Disable Comparison' : 'Enable Comparison'}
+						</Button>
+					</div>
+					{#if comparisonEnabled}
+						<div class="space-y-1">
 						<label class="text-xs font-medium text-muted-foreground" for="comparisonMode">Comparison Type</label>
 						<select
 							id="comparisonMode"
@@ -739,11 +710,59 @@
 					<div class="space-y-1">
 						<label class="text-xs font-medium text-muted-foreground" for="comparisonEnd">Comparison End</label>
 						<Input id="comparisonEnd" type="date" bind:value={comparisonEnd} disabled={loading} />
-					</div>
-				{/if}
-			</div>
+						</div>
+					{/if}
+				</div>
 
-			<ActiveFilterChips chips={chipItems} />
+				{#if !hasFilterData}
+					<p class="text-sm text-muted-foreground">
+						{summary
+							? 'No rows were returned for this range, so there are no additional filters to apply.'
+							: 'Run the report to load Program, Employer, Coach, and Status filter values.'}
+					</p>
+				{/if}
+
+				{#if hasFilterData}
+					<div class="grid gap-3 md:grid-cols-4">
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Program</p>
+							<MultiSelectDropdown
+								placeholder="All programs"
+								options={programOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedPrograms}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Employer</p>
+							<MultiSelectDropdown
+								placeholder="All employers"
+								options={employerOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedEmployers}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Coach</p>
+							<MultiSelectDropdown
+								placeholder="All coaches"
+								options={coachOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedCoaches}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Status</p>
+							<MultiSelectDropdown
+								placeholder="All statuses"
+								options={statusOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedStatuses}
+								disabled={loading}
+							/>
+						</div>
+					</div>
+					<ActiveFilterChips chips={chipItems} />
+				{/if}
 
 			<div class="flex flex-wrap items-center gap-2">
 				<Button variant="destructive" class={RUN_BUTTON_CLASS} onclick={runReport} disabled={loading}>

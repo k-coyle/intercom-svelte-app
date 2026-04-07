@@ -47,7 +47,7 @@
 
 	type LineSeriesResult = {
 		dates: string[];
-		series: Array<{ name: string; values: number[] }>;
+		series: Array<{ name: string; values: Array<number | null> }>;
 		xAxisLabel: string;
 	};
 
@@ -75,6 +75,9 @@
 	];
 	const RUN_BUTTON_CLASS = 'bg-red-700 text-white hover:bg-red-600 border-red-700';
 	const EXPORT_BUTTON_CLASS = 'border-green-700 text-green-700 hover:bg-green-50';
+	const COMPARISON_ENABLED_BUTTON_CLASS = 'w-full bg-blue-900 text-white hover:bg-blue-800 border-blue-900';
+	const COMPARISON_DISABLED_BUTTON_CLASS =
+		'w-full border-blue-300 text-blue-900 hover:bg-blue-50';
 
 	let rangeStart = '';
 	let rangeEnd = '';
@@ -241,21 +244,21 @@
 		return new Date(unix * 1000).toISOString().slice(0, 10);
 	}
 
-	function buildDateSeries(
-		rows: EnrollmentRow[],
-		dimension: 'program' | 'employer',
-		mode: 'selected-range' | 'from-first-enrollment'
-	): LineSeriesResult {
-		const endUnixExclusive = toUnixEndExclusive(effectiveEndDate() ?? '');
-		if (endUnixExclusive == null) return { dates: [], series: [], xAxisLabel: 'Date' };
+		function buildDateSeries(
+			rows: EnrollmentRow[],
+			dimension: 'program' | 'employer',
+			mode: 'selected-range' | 'from-first-enrollment' | 'selected-range-cumulative'
+		): LineSeriesResult {
+			const endUnixExclusive = toUnixEndExclusive(effectiveEndDate() ?? '');
+			if (endUnixExclusive == null) return { dates: [], series: [], xAxisLabel: 'Date' };
 
-		let startUnix: number | null = null;
-		if (mode === 'selected-range') {
-			startUnix = toUnixStart(effectiveStartDate() ?? '');
-		} else {
-			const source = rowsAfterNonDateFilters(loadedRows)
-				.map((row) => row.enrollmentAt)
-				.filter((value): value is number => value != null && Number.isFinite(value));
+			let startUnix: number | null = null;
+			if (mode === 'selected-range' || mode === 'selected-range-cumulative') {
+				startUnix = toUnixStart(effectiveStartDate() ?? '');
+			} else {
+				const source = rowsAfterNonDateFilters(loadedRows)
+					.map((row) => row.enrollmentAt)
+					.filter((value): value is number => value != null && Number.isFinite(value));
 			if (source.length > 0) {
 				startUnix = Math.min(...source);
 			}
@@ -270,17 +273,20 @@
 		for (let cursor = firstBucket; cursor < endUnixExclusive; cursor = nextBucketUnix(cursor, granularity)) {
 			bucketStarts.push(cursor);
 		}
-		const labels = bucketStarts.map((unix) => bucketLabel(unix, granularity));
-		const indexByBucket = new Map<number, number>(bucketStarts.map((unix, index) => [unix, index]));
+			const labels = bucketStarts.map((unix) => bucketLabel(unix, granularity));
+			const indexByBucket = new Map<number, number>(bucketStarts.map((unix, index) => [unix, index]));
 
-		const totals = new Map<string, number>();
-		for (const row of rows) {
-			if (row.enrollmentAt == null || row.enrollmentAt < startUnix || row.enrollmentAt >= endUnixExclusive) {
-				continue;
-			}
-			const keys =
-				dimension === 'program'
-					? row.programs?.length
+			const totals = new Map<string, number>();
+			for (const row of rows) {
+				if (row.enrollmentAt == null || row.enrollmentAt >= endUnixExclusive) {
+					continue;
+				}
+				if (mode !== 'selected-range-cumulative' && row.enrollmentAt < startUnix) {
+					continue;
+				}
+				const keys =
+					dimension === 'program'
+						? row.programs?.length
 						? row.programs
 						: ['Unspecified']
 					: [row.employer?.trim() || 'Unspecified'];
@@ -289,25 +295,22 @@
 			}
 		}
 
-		const topKeys = [...totals.entries()]
-			.sort((a, b) => b[1] - a[1])
-			.slice(0, 5)
+		const orderedKeys = [...totals.entries()]
+			.sort((a, b) => {
+				if (b[1] !== a[1]) return b[1] - a[1];
+				return a[0].localeCompare(b[0]);
+			})
 			.map(([key]) => key);
-		const otherKey = topKeys.length < totals.size ? 'Other' : null;
-		const seriesMap = new Map<string, number[]>();
-		for (const key of topKeys) {
+			const seriesMap = new Map<string, Array<number | null>>();
+		for (const key of orderedKeys) {
 			seriesMap.set(key, labels.map(() => 0));
 		}
-		if (otherKey) seriesMap.set(otherKey, labels.map(() => 0));
+		const openingCounts = new Map<string, number>();
 
 		for (const row of rows) {
-			if (row.enrollmentAt == null || row.enrollmentAt < startUnix || row.enrollmentAt >= endUnixExclusive) {
+			if (row.enrollmentAt == null || row.enrollmentAt >= endUnixExclusive) {
 				continue;
 			}
-			const bucketUnix = bucketStartUnix(row.enrollmentAt, granularity);
-			const bucketIndex = indexByBucket.get(bucketUnix);
-			if (bucketIndex == null) continue;
-
 			const keys =
 				dimension === 'program'
 					? row.programs?.length
@@ -315,14 +318,44 @@
 						: ['Unspecified']
 					: [row.employer?.trim() || 'Unspecified'];
 
-			for (const key of keys) {
-				if (seriesMap.has(key)) {
-					seriesMap.get(key)![bucketIndex] += 1;
-				} else if (otherKey) {
-					seriesMap.get(otherKey)![bucketIndex] += 1;
+			if (mode === 'selected-range-cumulative' && row.enrollmentAt < startUnix) {
+				for (const key of keys) {
+					openingCounts.set(key, (openingCounts.get(key) ?? 0) + 1);
 				}
+				continue;
+			}
+			if (row.enrollmentAt < startUnix) {
+				continue;
+			}
+
+			const bucketUnix = bucketStartUnix(row.enrollmentAt, granularity);
+			const bucketIndex = indexByBucket.get(bucketUnix);
+			if (bucketIndex == null) continue;
+
+			for (const key of keys) {
+				const values = seriesMap.get(key);
+				if (!values) continue;
+				values[bucketIndex] = (values[bucketIndex] ?? 0) + 1;
 			}
 		}
+
+		if (mode === 'selected-range-cumulative') {
+				for (const key of orderedKeys) {
+					const values = seriesMap.get(key);
+					if (!values) continue;
+					let running = openingCounts.get(key) ?? 0;
+					let started = false;
+					for (let index = 0; index < values.length; index += 1) {
+						running += values[index] ?? 0;
+						if (!started && running <= 0) {
+							values[index] = null;
+							continue;
+						}
+						started = true;
+						values[index] = running;
+					}
+				}
+			}
 
 		return {
 			dates: labels,
@@ -412,6 +445,13 @@
 
 		if (comparisonStart !== previous.startDate || comparisonEnd !== previous.endDate) {
 			comparisonMode = 'custom';
+		}
+	}
+
+	function toggleComparison(): void {
+		comparisonEnabled = !comparisonEnabled;
+		if (comparisonEnabled) {
+			syncComparisonInputsForPreviousMode(true);
 		}
 	}
 
@@ -674,6 +714,7 @@
 	let table: Array<Record<string, string>> = [];
 	let chips: FilterChip[] = [];
 	let modalFilterLabels: string[] = [];
+	let hasFilterData = false;
 
 	$: {
 		const nextSignature = comparisonSignature();
@@ -715,18 +756,19 @@
 			comparisonEnabled && comparisonRange
 				? newEnrollmentRows(comparisonLoadedRows, comparisonRange.startDate, comparisonRange.endDate)
 				: [];
-		totalProgramBar = buildBarData(totalRows, 'program');
-		totalEmployerBar = buildBarData(totalRows, 'employer');
-		newProgramBar = buildBarData(newRows, 'program');
-		newEmployerBar = buildBarData(newRows, 'employer');
-		totalProgramSeries = buildDateSeries(totalRows, 'program', 'from-first-enrollment');
-		totalEmployerSeries = buildDateSeries(totalRows, 'employer', 'from-first-enrollment');
-		newProgramSeries = buildDateSeries(newRows, 'program', 'selected-range');
-		newEmployerSeries = buildDateSeries(newRows, 'employer', 'selected-range');
-		table = tableRows();
-		chips = activeFilterChips();
-		modalFilterLabels = chips.map((chip) => chip.label);
-	}
+			totalProgramBar = buildBarData(totalRows, 'program');
+			totalEmployerBar = buildBarData(totalRows, 'employer');
+			newProgramBar = buildBarData(newRows, 'program');
+			newEmployerBar = buildBarData(newRows, 'employer');
+			totalProgramSeries = buildDateSeries(totalRows, 'program', 'selected-range-cumulative');
+			totalEmployerSeries = buildDateSeries(totalRows, 'employer', 'selected-range-cumulative');
+			newProgramSeries = buildDateSeries(newRows, 'program', 'selected-range');
+			newEmployerSeries = buildDateSeries(newRows, 'employer', 'selected-range');
+			table = tableRows();
+			chips = activeFilterChips();
+			modalFilterLabels = chips.map((chip) => chip.label);
+			hasFilterData = loadedRows.length > 0;
+		}
 
 	$: syncComparisonInputsForPreviousMode();
 
@@ -754,11 +796,11 @@
 		<Card.Header class="pb-3">
 			<Card.Title class="text-base">Enrollment Filters</Card.Title>
 		</Card.Header>
-		<Card.Content class="space-y-4">
-			<div class="grid gap-3 md:grid-cols-4">
-				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="rangeStart">Reporting Start</label>
-					<Input
+			<Card.Content class="space-y-4">
+				<div class="grid gap-3 md:grid-cols-4">
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="rangeStart">Reporting Start</label>
+						<Input
 						id="rangeStart"
 						type="date"
 						bind:value={rangeStart}
@@ -773,46 +815,26 @@
 						type="date"
 						bind:value={rangeEnd}
 						min={data?.sandboxModeOffline ? sandboxDateMin : undefined}
-						max={data?.sandboxModeOffline ? sandboxDateMax : undefined}
-					/>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Program</p>
-					<MultiSelectDropdown
-						placeholder="All programs"
-						options={programOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedPrograms}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Employer</p>
-					<MultiSelectDropdown
-						placeholder="All employers"
-						options={employerOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedEmployers}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-			</div>
-
-			<div class="grid gap-3 md:grid-cols-4">
-				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="comparisonEnabled">Comparison</label>
-					<label class="inline-flex h-10 w-full items-center gap-2 rounded-md border border-input bg-background px-3 text-sm">
-						<input
-						id="comparisonEnabled"
-							type="checkbox"
-							class="size-4"
-							bind:checked={comparisonEnabled}
-							disabled={loading}
-							onchange={() => syncComparisonInputsForPreviousMode(true)}
+							max={data?.sandboxModeOffline ? sandboxDateMax : undefined}
 						/>
-						<span>{comparisonEnabled ? 'Enabled' : 'Disabled'}</span>
-					</label>
-				</div>
-				{#if comparisonEnabled}
+					</div>
 					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="comparisonToggle">Comparison</label>
+						<Button
+							id="comparisonToggle"
+							type="button"
+							variant={comparisonEnabled ? 'default' : 'outline'}
+							class={comparisonEnabled
+								? COMPARISON_ENABLED_BUTTON_CLASS
+								: COMPARISON_DISABLED_BUTTON_CLASS}
+							onclick={toggleComparison}
+							disabled={loading}
+						>
+							{comparisonEnabled ? 'Disable Comparison' : 'Enable Comparison'}
+						</Button>
+					</div>
+					{#if comparisonEnabled}
+						<div class="space-y-1">
 						<label class="text-xs font-medium text-muted-foreground" for="comparisonMode">Comparison Type</label>
 						<select
 							id="comparisonMode"
@@ -832,11 +854,41 @@
 					<div class="space-y-1">
 						<label class="text-xs font-medium text-muted-foreground" for="comparisonEnd">Comparison End</label>
 						<Input id="comparisonEnd" type="date" bind:value={comparisonEnd} disabled={loading} />
-					</div>
-				{/if}
-			</div>
+						</div>
+					{/if}
+				</div>
 
-			<ActiveFilterChips chips={chips} />
+				{#if !hasFilterData}
+					<p class="text-sm text-muted-foreground">
+						{summary
+							? 'No rows were returned for this range, so there are no additional filters to apply.'
+							: 'Run the report to load available Program and Employer filter values.'}
+					</p>
+				{/if}
+
+				{#if hasFilterData}
+					<div class="grid gap-3 md:grid-cols-4">
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Program</p>
+							<MultiSelectDropdown
+								placeholder="All programs"
+								options={programOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedPrograms}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Employer</p>
+							<MultiSelectDropdown
+								placeholder="All employers"
+								options={employerOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedEmployers}
+								disabled={loading}
+							/>
+						</div>
+					</div>
+					<ActiveFilterChips chips={chips} />
+				{/if}
 
 			<div class="flex flex-wrap items-center gap-2">
 				<Button variant="destructive" class={RUN_BUTTON_CLASS} onclick={runReport} disabled={loading}>
@@ -858,68 +910,6 @@
 	</Card.Root>
 
 	<div class="grid gap-4 xl:grid-cols-2">
-		<div class="space-y-4">
-			<KpiCard title="Total Enrollments" value={totalRows.length} />
-			<Card.Root>
-				<Card.Header class="pb-2">
-					<Card.Title class="text-base">Total Enrollments by Program</Card.Title>
-				</Card.Header>
-				<Card.Content>
-					<HorizontalBarChart
-						items={totalProgramBar}
-						xAxisLabel="Enrollments"
-						yAxisLabel="Program"
-						expandedTitle="Total Enrollments by Program"
-						activeFilters={modalFilterLabels}
-					/>
-				</Card.Content>
-			</Card.Root>
-			<Card.Root>
-				<Card.Header class="pb-2">
-					<Card.Title class="text-base">Total Enrollments by Employer</Card.Title>
-				</Card.Header>
-				<Card.Content>
-					<HorizontalBarChart
-						items={totalEmployerBar}
-						xAxisLabel="Enrollments"
-						yAxisLabel="Employer"
-						expandedTitle="Total Enrollments by Employer"
-						activeFilters={modalFilterLabels}
-					/>
-				</Card.Content>
-			</Card.Root>
-			<Card.Root>
-				<Card.Header class="pb-2">
-					<Card.Title class="text-base">Total Enrollments Trend by Program</Card.Title>
-				</Card.Header>
-				<Card.Content>
-					<MultiSeriesLineChart
-						dates={totalProgramSeries.dates}
-						series={totalProgramSeries.series}
-						yAxisLabel="Enrollments"
-						xAxisLabel={totalProgramSeries.xAxisLabel}
-						expandedTitle="Total Enrollments Trend by Program"
-						activeFilters={modalFilterLabels}
-					/>
-				</Card.Content>
-			</Card.Root>
-			<Card.Root>
-				<Card.Header class="pb-2">
-					<Card.Title class="text-base">Total Enrollments Trend by Employer</Card.Title>
-				</Card.Header>
-				<Card.Content>
-					<MultiSeriesLineChart
-						dates={totalEmployerSeries.dates}
-						series={totalEmployerSeries.series}
-						yAxisLabel="Enrollments"
-						xAxisLabel={totalEmployerSeries.xAxisLabel}
-						expandedTitle="Total Enrollments Trend by Employer"
-						activeFilters={modalFilterLabels}
-					/>
-				</Card.Content>
-			</Card.Root>
-		</div>
-
 		<div class="space-y-4">
 			<KpiCard
 				title="New Enrollments"
@@ -982,6 +972,68 @@
 						yAxisLabel="Enrollments"
 						xAxisLabel={newEmployerSeries.xAxisLabel}
 						expandedTitle="New Enrollments Trend by Employer"
+						activeFilters={modalFilterLabels}
+					/>
+				</Card.Content>
+			</Card.Root>
+		</div>
+
+		<div class="space-y-4">
+			<KpiCard title="Total Enrollments" value={totalRows.length} />
+			<Card.Root>
+				<Card.Header class="pb-2">
+					<Card.Title class="text-base">Total Enrollments by Program</Card.Title>
+				</Card.Header>
+				<Card.Content>
+					<HorizontalBarChart
+						items={totalProgramBar}
+						xAxisLabel="Enrollments"
+						yAxisLabel="Program"
+						expandedTitle="Total Enrollments by Program"
+						activeFilters={modalFilterLabels}
+					/>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root>
+				<Card.Header class="pb-2">
+					<Card.Title class="text-base">Total Enrollments by Employer</Card.Title>
+				</Card.Header>
+				<Card.Content>
+					<HorizontalBarChart
+						items={totalEmployerBar}
+						xAxisLabel="Enrollments"
+						yAxisLabel="Employer"
+						expandedTitle="Total Enrollments by Employer"
+						activeFilters={modalFilterLabels}
+					/>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root>
+				<Card.Header class="pb-2">
+					<Card.Title class="text-base">Total Enrollments Trend by Program</Card.Title>
+				</Card.Header>
+				<Card.Content>
+					<MultiSeriesLineChart
+						dates={totalProgramSeries.dates}
+						series={totalProgramSeries.series}
+						yAxisLabel="Enrollments"
+						xAxisLabel={totalProgramSeries.xAxisLabel}
+						expandedTitle="Total Enrollments Trend by Program"
+						activeFilters={modalFilterLabels}
+					/>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root>
+				<Card.Header class="pb-2">
+					<Card.Title class="text-base">Total Enrollments Trend by Employer</Card.Title>
+				</Card.Header>
+				<Card.Content>
+					<MultiSeriesLineChart
+						dates={totalEmployerSeries.dates}
+						series={totalEmployerSeries.series}
+						yAxisLabel="Enrollments"
+						xAxisLabel={totalEmployerSeries.xAxisLabel}
+						expandedTitle="Total Enrollments Trend by Employer"
 						activeFilters={modalFilterLabels}
 					/>
 				</Card.Content>

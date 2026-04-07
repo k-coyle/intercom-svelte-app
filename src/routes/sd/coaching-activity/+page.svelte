@@ -85,6 +85,9 @@
 	const DIRECTIONALITY_OPTIONS = ['Unidirectional', 'Bidirectional', 'Other'];
 	const RUN_BUTTON_CLASS = 'bg-red-700 text-white hover:bg-red-600 border-red-700';
 	const EXPORT_BUTTON_CLASS = 'border-green-700 text-green-700 hover:bg-green-50';
+	const COMPARISON_ENABLED_BUTTON_CLASS = 'w-full bg-blue-900 text-white hover:bg-blue-800 border-blue-900';
+	const COMPARISON_DISABLED_BUTTON_CLASS =
+		'w-full border-blue-300 text-blue-900 hover:bg-blue-50';
 
 	let rangeStart = '';
 	let rangeEnd = '';
@@ -296,24 +299,23 @@
 			}
 		}
 
-		const topKeys = [...totals.entries()]
-			.sort((a, b) => b[1] - a[1])
-			.slice(0, 5)
-			.map(([key]) => key);
-		const otherKey = topKeys.length < totals.size ? 'Other' : null;
-		const seriesMap = new Map<string, number[]>();
-		for (const key of topKeys) seriesMap.set(key, dates.map(() => 0));
-		if (otherKey) seriesMap.set(otherKey, dates.map(() => 0));
+			const orderedKeys = [...totals.entries()]
+				.sort((a, b) => {
+					if (b[1] !== a[1]) return b[1] - a[1];
+					return a[0].localeCompare(b[0]);
+				})
+				.map(([key]) => key);
+			const seriesMap = new Map<string, number[]>();
+			for (const key of orderedKeys) seriesMap.set(key, dates.map(() => 0));
 
-		for (const row of rows) {
-			if (row.createdAt < startUnix || row.createdAt >= endUnixExclusive) continue;
-			const idx = dateIndex.get(bucketStartUnix(row.createdAt, granularity));
-			if (idx == null) continue;
-			for (const key of valueKeys(row, dimension)) {
-				if (seriesMap.has(key)) seriesMap.get(key)![idx] += 1;
-				else if (otherKey) seriesMap.get(otherKey)![idx] += 1;
+			for (const row of rows) {
+				if (row.createdAt < startUnix || row.createdAt >= endUnixExclusive) continue;
+				const idx = dateIndex.get(bucketStartUnix(row.createdAt, granularity));
+				if (idx == null) continue;
+				for (const key of valueKeys(row, dimension)) {
+					if (seriesMap.has(key)) seriesMap.get(key)![idx] += 1;
+				}
 			}
-		}
 
 		return {
 			dates,
@@ -394,6 +396,13 @@
 
 		if (comparisonStart !== previous.startDate || comparisonEnd !== previous.endDate) {
 			comparisonMode = 'custom';
+		}
+	}
+
+	function toggleComparison(): void {
+		comparisonEnabled = !comparisonEnabled;
+		if (comparisonEnabled) {
+			syncComparisonInputsForPreviousMode(true);
 		}
 	}
 
@@ -729,6 +738,7 @@
 	let table: Array<Record<string, string>> = [];
 	let chipItems: FilterChip[] = [];
 	let modalFilterLabels: string[] = [];
+	let hasFilterData = false;
 
 	$: {
 		const nextSignature = comparisonSignature();
@@ -787,11 +797,12 @@
 		lineChannel = dateSeriesByDimension(rows, 'channel');
 		lineServiceCode = dateSeriesByDimension(rows, 'serviceCode');
 		lineCoach = dateSeriesByDimension(rows, 'coach');
-		lineDirection = dateSeriesByDimension(rows, 'directionality');
-		table = tableRows(rows);
-		chipItems = buildFilterChips();
-		modalFilterLabels = chipItems.map((chip) => chip.label);
-	}
+			lineDirection = dateSeriesByDimension(rows, 'directionality');
+			table = tableRows(rows);
+			chipItems = buildFilterChips();
+			modalFilterLabels = chipItems.map((chip) => chip.label);
+			hasFilterData = loadedRows.length > 0;
+		}
 
 	$: syncComparisonInputsForPreviousMode();
 
@@ -819,11 +830,11 @@
 		<Card.Header class="pb-3">
 			<Card.Title class="text-base">Coaching Activity Filters</Card.Title>
 		</Card.Header>
-		<Card.Content class="space-y-4">
-			<div class="grid gap-3 md:grid-cols-4 xl:grid-cols-7">
-				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="rangeStart">Reporting Start</label>
-					<Input
+			<Card.Content class="space-y-4">
+				<div class="grid gap-3 md:grid-cols-4">
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="rangeStart">Reporting Start</label>
+						<Input
 						id="rangeStart"
 						type="date"
 						bind:value={rangeStart}
@@ -838,85 +849,26 @@
 						type="date"
 						bind:value={rangeEnd}
 						min={data?.sandboxModeOffline ? sandboxDateMin : undefined}
-						max={data?.sandboxModeOffline ? sandboxDateMax : undefined}
-					/>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Program</p>
-					<MultiSelectDropdown
-						placeholder="All programs"
-						options={programOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedPrograms}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Employer</p>
-					<MultiSelectDropdown
-						placeholder="All employers"
-						options={employerOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedEmployers}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Service Code</p>
-					<MultiSelectDropdown
-						placeholder="All service codes"
-						options={serviceCodeOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedServiceCodes}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Coach</p>
-					<MultiSelectDropdown
-						placeholder="All coaches"
-						options={coachOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedCoaches}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground">Channel</p>
-					<MultiSelectDropdown
-						placeholder="All channels"
-						options={channelOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedChannels}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-			</div>
-
-			<div class="grid gap-3 md:grid-cols-4">
-				<div class="space-y-1 md:col-span-2">
-					<p class="text-xs font-medium text-muted-foreground">Directionality</p>
-					<MultiSelectDropdown
-						placeholder="All directionality"
-						options={directionalityOptions.map((value) => ({ value, label: value }))}
-						bind:selected={selectedDirectionality}
-						disabled={loading || loadedRows.length === 0}
-					/>
-				</div>
-			</div>
-
-			<div class="grid gap-3 md:grid-cols-4">
-				<div class="space-y-1">
-					<label class="text-xs font-medium text-muted-foreground" for="comparisonEnabled">Comparison</label>
-					<label class="inline-flex h-10 w-full items-center gap-2 rounded-md border border-input bg-background px-3 text-sm">
-						<input
-							id="comparisonEnabled"
-							type="checkbox"
-							class="size-4"
-							bind:checked={comparisonEnabled}
-							disabled={loading}
-							onchange={() => syncComparisonInputsForPreviousMode(true)}
+							max={data?.sandboxModeOffline ? sandboxDateMax : undefined}
 						/>
-						<span>{comparisonEnabled ? 'Enabled' : 'Disabled'}</span>
-					</label>
-				</div>
-				{#if comparisonEnabled}
+					</div>
 					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="comparisonToggle">Comparison</label>
+						<Button
+							id="comparisonToggle"
+							type="button"
+							variant={comparisonEnabled ? 'default' : 'outline'}
+							class={comparisonEnabled
+								? COMPARISON_ENABLED_BUTTON_CLASS
+								: COMPARISON_DISABLED_BUTTON_CLASS}
+							onclick={toggleComparison}
+							disabled={loading}
+						>
+							{comparisonEnabled ? 'Disable Comparison' : 'Enable Comparison'}
+						</Button>
+					</div>
+					{#if comparisonEnabled}
+						<div class="space-y-1">
 						<label class="text-xs font-medium text-muted-foreground" for="comparisonMode">Comparison Type</label>
 						<select
 							id="comparisonMode"
@@ -936,11 +888,77 @@
 					<div class="space-y-1">
 						<label class="text-xs font-medium text-muted-foreground" for="comparisonEnd">Comparison End</label>
 						<Input id="comparisonEnd" type="date" bind:value={comparisonEnd} disabled={loading} />
-					</div>
-				{/if}
-			</div>
+						</div>
+					{/if}
+				</div>
 
-			<ActiveFilterChips chips={chipItems} />
+				{#if !hasFilterData}
+					<p class="text-sm text-muted-foreground">
+						{summary
+							? 'No rows were returned for this range, so there are no additional filters to apply.'
+							: 'Run the report to load Program, Employer, Service Code, Coach, Channel, and Directionality filter values.'}
+					</p>
+				{/if}
+
+				{#if hasFilterData}
+					<div class="grid gap-3 md:grid-cols-4 xl:grid-cols-6">
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Program</p>
+							<MultiSelectDropdown
+								placeholder="All programs"
+								options={programOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedPrograms}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Employer</p>
+							<MultiSelectDropdown
+								placeholder="All employers"
+								options={employerOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedEmployers}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Service Code</p>
+							<MultiSelectDropdown
+								placeholder="All service codes"
+								options={serviceCodeOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedServiceCodes}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Coach</p>
+							<MultiSelectDropdown
+								placeholder="All coaches"
+								options={coachOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedCoaches}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Channel</p>
+							<MultiSelectDropdown
+								placeholder="All channels"
+								options={channelOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedChannels}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Directionality</p>
+							<MultiSelectDropdown
+								placeholder="All directionality"
+								options={directionalityOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedDirectionality}
+								disabled={loading}
+							/>
+						</div>
+					</div>
+					<ActiveFilterChips chips={chipItems} />
+				{/if}
 
 			<div class="flex flex-wrap items-center gap-2">
 				<div class="flex flex-wrap items-center gap-2">
