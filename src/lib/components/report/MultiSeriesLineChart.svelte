@@ -1,17 +1,16 @@
 <script lang="ts">
 	import Maximize2Icon from '@lucide/svelte/icons/maximize-2';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import {
+		colorForCategory,
+		colorWithAlpha,
+		lightenColor
+	} from '$lib/components/report/chartPalette';
 
-	export let title = '';
-	export let expandedTitle = '';
-	export let dates: string[] = [];
-	export let series: Array<{ name: string; values: Array<number | null> }> = [];
-	export let xAxisLabel = 'Date';
-	export let yAxisLabel = 'Count';
-	export let emptyText = 'No data available for the selected filters.';
-	export let activeFilters: string[] = [];
-	export let expandable = true;
-	export let defaultVisibleCount = 5;
+	type ChartSeries = {
+		name: string;
+		values: Array<number | null>;
+	};
 
 	type Dims = {
 		svgWidth: number;
@@ -27,6 +26,23 @@
 		values: Array<number | null>;
 		total: number;
 	};
+
+	export let title = '';
+	export let expandedTitle = '';
+	export let dates: string[] = [];
+	export let series: ChartSeries[] = [];
+	export let comparisonSeries: ChartSeries[] = [];
+	export let showComparison = false;
+	export let currentPeriodLabel = 'Current Period';
+	export let comparisonPeriodLabel = 'Comparison Period';
+	export let currentRangeLabel = '';
+	export let comparisonRangeLabel = '';
+	export let xAxisLabel = 'Date';
+	export let yAxisLabel = 'Count';
+	export let emptyText = 'No data available for the selected filters.';
+	export let activeFilters: string[] = [];
+	export let expandable = true;
+	export let defaultVisibleCount = 5;
 
 	const INLINE_DIMS: Dims = {
 		svgWidth: 720,
@@ -46,25 +62,15 @@
 		paddingBottom: 112
 	};
 
-	const PALETTE = [
-		'var(--color-chart-1, #e76f51)',
-		'var(--color-chart-2, #2a9d8f)',
-		'var(--color-chart-3, #457b9d)',
-		'var(--color-chart-4, #e9c46a)',
-		'var(--color-chart-5, #f4a261)',
-		'#8ecae6',
-		'#6d597a',
-		'#43aa8b',
-		'#f94144',
-		'#577590'
-	];
-
 	let expandedOpen = false;
 	let selectedSeriesNames: string[] = [];
 	let seriesSignature = '';
 
-	function colorAt(index: number): string {
-		return PALETTE[index % PALETTE.length];
+	function normalizedValue(value: unknown): number | null {
+		if (value == null) return null;
+		const n = Number(value);
+		if (!Number.isFinite(n) || n < 0) return null;
+		return n;
 	}
 
 	function plotWidth(dims: Dims): number {
@@ -73,13 +79,6 @@
 
 	function plotHeight(dims: Dims): number {
 		return dims.svgHeight - dims.paddingTop - dims.paddingBottom;
-	}
-
-	function normalizedValue(value: unknown): number | null {
-		if (value == null) return null;
-		const n = Number(value);
-		if (!Number.isFinite(n) || n < 0) return null;
-		return n;
 	}
 
 	function xAt(index: number, points: number, dims: Dims): number {
@@ -122,7 +121,15 @@
 		return Math.max(0, ...numbers);
 	}
 
-	function polylineSegments(values: Array<number | null>, maxValue: number, dims: Dims): string[] {
+	function alignedValues(values: Array<number | null>, targetLength: number): Array<number | null> {
+		const out = Array.from({ length: targetLength }, () => null as number | null);
+		for (let index = 0; index < Math.min(targetLength, values.length); index += 1) {
+			out[index] = normalizedValue(values[index]);
+		}
+		return out;
+	}
+
+	function polylineSegments(values: Array<number | null>, maxValue: number, dims: Dims, points: number): string[] {
 		const segments: string[] = [];
 		let current: string[] = [];
 		for (let index = 0; index < values.length; index += 1) {
@@ -132,7 +139,7 @@
 				current = [];
 				continue;
 			}
-			current.push(`${xAt(index, pointCount, dims)},${yAt(value, maxValue, dims)}`);
+			current.push(`${xAt(index, points, dims)},${yAt(value, maxValue, dims)}`);
 		}
 		if (current.length > 1) segments.push(current.join(' '));
 		return segments;
@@ -140,9 +147,9 @@
 
 	function setSeriesSelected(name: string, selected: boolean): void {
 		if (selected) {
-			selectedSeriesNames = rankedSeries
-				.map((entry) => entry.name)
-				.filter((entryName) => entryName === name || selectedSeriesNames.includes(entryName));
+			selectedSeriesNames = selectableSeriesNames.filter(
+				(entryName) => entryName === name || selectedSeriesNames.includes(entryName)
+			);
 			return;
 		}
 
@@ -152,11 +159,11 @@
 	}
 
 	function selectTopCategories(): void {
-		selectedSeriesNames = rankedSeries.slice(0, defaultVisibleCount).map((entry) => entry.name);
+		selectedSeriesNames = defaultInlineSeriesNames;
 	}
 
 	function selectAllCategories(): void {
-		selectedSeriesNames = rankedSeries.map((entry) => entry.name);
+		selectedSeriesNames = selectableSeriesNames;
 	}
 
 	function openExpanded() {
@@ -165,9 +172,9 @@
 	}
 
 	$: pointCount = dates.length;
-	$: rankedSeries = series
+	$: rankedCurrentSeries = series
 		.map((entry) => {
-			const values = dates.map((_, index) => normalizedValue(entry.values[index]));
+			const values = alignedValues(entry.values, pointCount);
 			return {
 				name: entry.name,
 				values,
@@ -179,29 +186,80 @@
 			if (b.total !== a.total) return b.total - a.total;
 			return a.name.localeCompare(b.name);
 		});
-	$: visibleInlineSeries = rankedSeries.slice(0, defaultVisibleCount);
-	$: hasHiddenSeries = rankedSeries.length > visibleInlineSeries.length;
-	$: nextSeriesSignature = rankedSeries.map((entry) => entry.name).join('\u0000');
+	$: comparisonVisible = showComparison && comparisonSeries.length > 0;
+	$: rankedComparisonSeries = comparisonVisible
+		? comparisonSeries
+				.map((entry) => {
+					const values = alignedValues(entry.values, pointCount);
+					return {
+						name: entry.name,
+						values,
+						total: totalDefined(values)
+					} satisfies RankedSeries;
+				})
+				.filter((entry) => entry.values.some((value) => value != null))
+				.sort((a, b) => {
+					if (b.total !== a.total) return b.total - a.total;
+					return a.name.localeCompare(b.name);
+				})
+		: [];
+	$: currentSeriesMap = new Map(rankedCurrentSeries.map((entry) => [entry.name, entry]));
+	$: comparisonSeriesMap = new Map(rankedComparisonSeries.map((entry) => [entry.name, entry]));
+	$: comparisonOnlyNames = rankedComparisonSeries
+		.map((entry) => entry.name)
+		.filter((name) => !currentSeriesMap.has(name));
+	$: selectableSeriesNames = [
+		...rankedCurrentSeries.map((entry) => entry.name),
+		...(comparisonVisible ? comparisonOnlyNames : [])
+	];
+	$: defaultInlineSeriesNames =
+		rankedCurrentSeries.length > 0
+			? rankedCurrentSeries.slice(0, defaultVisibleCount).map((entry) => entry.name)
+			: selectableSeriesNames.slice(0, defaultVisibleCount);
+	$: hasHiddenSeries = selectableSeriesNames.length > defaultInlineSeriesNames.length;
+	$: nextSeriesSignature = selectableSeriesNames.join('\u0000');
 	$: if (nextSeriesSignature !== seriesSignature) {
-		const available = new Set(rankedSeries.map((entry) => entry.name));
+		const available = new Set(selectableSeriesNames);
 		const retained = selectedSeriesNames.filter((name) => available.has(name));
 		selectedSeriesNames =
 			retained.length > 0
-				? rankedSeries.map((entry) => entry.name).filter((name) => retained.includes(name))
-				: visibleInlineSeries.map((entry) => entry.name);
+				? selectableSeriesNames.filter((name) => retained.includes(name))
+				: defaultInlineSeriesNames;
 		seriesSignature = nextSeriesSignature;
 	}
 	$: selectedSeriesSet = new Set(selectedSeriesNames);
-	$: visibleExpandedSeries = rankedSeries.filter((entry) => selectedSeriesSet.has(entry.name));
-	$: inlineMaxValue = maxDefinedValues(visibleInlineSeries);
-	$: expandedMaxValue = maxDefinedValues(visibleExpandedSeries);
+	$: visibleInlineCurrentSeries = defaultInlineSeriesNames
+		.map((name) => currentSeriesMap.get(name) ?? comparisonSeriesMap.get(name))
+		.filter((entry): entry is RankedSeries => Boolean(entry));
+	$: visibleInlineComparisonSeries = comparisonVisible
+		? defaultInlineSeriesNames
+				.map((name) => comparisonSeriesMap.get(name))
+				.filter((entry): entry is RankedSeries => Boolean(entry))
+		: [];
+	$: visibleExpandedCurrentSeries = selectableSeriesNames
+		.filter((name) => selectedSeriesSet.has(name))
+		.map((name) => currentSeriesMap.get(name) ?? comparisonSeriesMap.get(name))
+		.filter((entry): entry is RankedSeries => Boolean(entry));
+	$: visibleExpandedComparisonSeries = comparisonVisible
+		? selectableSeriesNames
+				.filter((name) => selectedSeriesSet.has(name))
+				.map((name) => comparisonSeriesMap.get(name))
+				.filter((entry): entry is RankedSeries => Boolean(entry))
+		: [];
+	$: inlineMaxValue = Math.max(
+		maxDefinedValues(visibleInlineCurrentSeries),
+		maxDefinedValues(visibleInlineComparisonSeries)
+	);
+	$: expandedMaxValue = Math.max(
+		maxDefinedValues(visibleExpandedCurrentSeries),
+		maxDefinedValues(visibleExpandedComparisonSeries)
+	);
 	$: inlineYTicks = buildYTicks(inlineMaxValue);
 	$: expandedYTicks = buildYTicks(expandedMaxValue);
 	$: inlineXTicks = xTickIndices(dates.length, 12);
 	$: expandedXTicks = xTickIndices(dates.length, 28);
-	$: hasData = dates.length > 0 && rankedSeries.length > 0;
+	$: hasData = dates.length > 0 && selectableSeriesNames.length > 0;
 	$: resolvedExpandedTitle = expandedTitle || title || 'Chart';
-	$: colorBySeries = new Map(rankedSeries.map((entry, index) => [entry.name, colorAt(index)]));
 </script>
 
 <div class="space-y-3">
@@ -229,6 +287,24 @@
 			{emptyText}
 		</div>
 	{:else}
+		{#if comparisonVisible}
+			<div class="rounded-md border bg-muted/20 p-3 text-xs">
+				<div class="flex flex-wrap gap-4">
+					<span class="inline-flex items-center gap-2">
+						<span class="inline-block h-[2px] w-5 bg-slate-700"></span>
+						{currentPeriodLabel}
+					</span>
+					<span class="inline-flex items-center gap-2">
+						<span class="inline-block h-[2px] w-5 border-t-2 border-dashed border-slate-500"></span>
+						{comparisonPeriodLabel}
+					</span>
+				</div>
+				<div class="mt-2 grid gap-1 text-muted-foreground sm:grid-cols-2">
+					<span>{currentPeriodLabel}: {currentRangeLabel}</span>
+					<span>{comparisonPeriodLabel}: {comparisonRangeLabel}</span>
+				</div>
+			</div>
+		{/if}
 		<div class="space-y-2">
 			<button
 				type="button"
@@ -281,11 +357,25 @@
 							</text>
 						{/each}
 
-						{#each visibleInlineSeries as entry}
-							{#each polylineSegments(entry.values, inlineMaxValue, INLINE_DIMS) as points}
+						{#if comparisonVisible}
+							{#each visibleInlineComparisonSeries as entry}
+								{#each polylineSegments(entry.values, inlineMaxValue, INLINE_DIMS, pointCount) as points}
+									<polyline
+										fill="none"
+										stroke={colorWithAlpha(lightenColor(colorForCategory(entry.name), 0.18), 0.78)}
+										stroke-width="1.8"
+										stroke-dasharray="6 4"
+										points={points}
+									/>
+								{/each}
+							{/each}
+						{/if}
+
+						{#each visibleInlineCurrentSeries as entry}
+							{#each polylineSegments(entry.values, inlineMaxValue, INLINE_DIMS, pointCount) as points}
 								<polyline
 									fill="none"
-									stroke={colorBySeries.get(entry.name) ?? colorAt(0)}
+									stroke={colorForCategory(entry.name)}
 									stroke-width="2"
 									points={points}
 								/>
@@ -296,14 +386,14 @@
 										cx={xAt(valueIndex, pointCount, INLINE_DIMS)}
 										cy={yAt(value, inlineMaxValue, INLINE_DIMS)}
 										r="3"
-										fill={colorBySeries.get(entry.name) ?? colorAt(0)}
+										fill={colorForCategory(entry.name)}
 									/>
 									<text
 										x={xAt(valueIndex, pointCount, INLINE_DIMS)}
 										y={yAt(value, inlineMaxValue, INLINE_DIMS) - 7}
 										font-size="9"
 										text-anchor="middle"
-										fill={colorBySeries.get(entry.name) ?? colorAt(0)}
+										fill={colorForCategory(entry.name)}
 									>
 										{value}
 									</text>
@@ -329,16 +419,16 @@
 
 			{#if hasHiddenSeries}
 				<p class="text-xs text-muted-foreground">
-					Showing top {visibleInlineSeries.length} of {rankedSeries.length} categories. Expand to choose more.
+					Showing top {visibleInlineCurrentSeries.length} of {selectableSeriesNames.length} categories. Expand to choose more.
 				</p>
 			{/if}
 
 			<div class="flex flex-wrap gap-2 text-xs">
-				{#each visibleInlineSeries as entry}
+				{#each visibleInlineCurrentSeries as entry}
 					<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5">
 						<span
 							class="inline-block size-2 rounded-full"
-							style={`background-color: ${colorBySeries.get(entry.name) ?? colorAt(0)};`}
+							style={`background-color: ${colorForCategory(entry.name)};`}
 						></span>
 						{entry.name}
 					</span>
@@ -363,9 +453,27 @@
 							{/each}
 						</div>
 					{/if}
+					{#if comparisonVisible}
+						<div class="rounded-md border bg-muted/20 p-3 text-xs">
+							<div class="flex flex-wrap gap-4">
+								<span class="inline-flex items-center gap-2">
+									<span class="inline-block h-[2px] w-5 bg-slate-700"></span>
+									{currentPeriodLabel}
+								</span>
+								<span class="inline-flex items-center gap-2">
+									<span class="inline-block h-[2px] w-5 border-t-2 border-dashed border-slate-500"></span>
+									{comparisonPeriodLabel}
+								</span>
+							</div>
+							<div class="mt-2 grid gap-1 text-muted-foreground sm:grid-cols-2">
+								<span>{currentPeriodLabel}: {currentRangeLabel}</span>
+								<span>{comparisonPeriodLabel}: {comparisonRangeLabel}</span>
+							</div>
+						</div>
+					{/if}
 					<div class="rounded-md border bg-muted/20 p-3">
 						<div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-							<span>Showing {visibleExpandedSeries.length} of {rankedSeries.length} categories.</span>
+							<span>Showing {visibleExpandedCurrentSeries.length} of {selectableSeriesNames.length} categories.</span>
 							{#if hasHiddenSeries}
 								<div class="flex items-center gap-2">
 									<button
@@ -387,28 +495,25 @@
 						</div>
 						{#if hasHiddenSeries}
 							<div class="mt-3 grid max-h-40 gap-2 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
-								{#each rankedSeries as entry}
+								{#each selectableSeriesNames as name}
 									<label class="flex items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs">
 										<input
 											type="checkbox"
-											checked={selectedSeriesNames.includes(entry.name)}
+											checked={selectedSeriesNames.includes(name)}
 											onchange={(event) =>
-												setSeriesSelected(
-													entry.name,
-													(event.currentTarget as HTMLInputElement).checked
-												)}
+												setSeriesSelected(name, (event.currentTarget as HTMLInputElement).checked)}
 										/>
 										<span
 											class="inline-block size-2 rounded-full"
-											style={`background-color: ${colorBySeries.get(entry.name) ?? colorAt(0)};`}
+											style={`background-color: ${colorForCategory(name)};`}
 										></span>
-										<span class="truncate">{entry.name}</span>
+										<span class="truncate">{name}</span>
 									</label>
 								{/each}
 							</div>
 						{/if}
 					</div>
-					{#if visibleExpandedSeries.length === 0}
+					{#if visibleExpandedCurrentSeries.length === 0}
 						<div class="flex h-[220px] items-center justify-center rounded-md bg-muted/30 text-sm text-muted-foreground">
 							Select at least one category to display the chart.
 						</div>
@@ -458,11 +563,25 @@
 									</text>
 								{/each}
 
-								{#each visibleExpandedSeries as entry}
-									{#each polylineSegments(entry.values, expandedMaxValue, EXPANDED_DIMS) as points}
+								{#if comparisonVisible}
+									{#each visibleExpandedComparisonSeries as entry}
+										{#each polylineSegments(entry.values, expandedMaxValue, EXPANDED_DIMS, pointCount) as points}
+											<polyline
+												fill="none"
+												stroke={colorWithAlpha(lightenColor(colorForCategory(entry.name), 0.18), 0.78)}
+												stroke-width="2.1"
+												stroke-dasharray="8 5"
+												points={points}
+											/>
+										{/each}
+									{/each}
+								{/if}
+
+								{#each visibleExpandedCurrentSeries as entry}
+									{#each polylineSegments(entry.values, expandedMaxValue, EXPANDED_DIMS, pointCount) as points}
 										<polyline
 											fill="none"
-											stroke={colorBySeries.get(entry.name) ?? colorAt(0)}
+											stroke={colorForCategory(entry.name)}
 											stroke-width="2.5"
 											points={points}
 										/>
@@ -473,14 +592,14 @@
 												cx={xAt(valueIndex, pointCount, EXPANDED_DIMS)}
 												cy={yAt(value, expandedMaxValue, EXPANDED_DIMS)}
 												r="3.6"
-												fill={colorBySeries.get(entry.name) ?? colorAt(0)}
+												fill={colorForCategory(entry.name)}
 											/>
 											<text
 												x={xAt(valueIndex, pointCount, EXPANDED_DIMS)}
 												y={yAt(value, expandedMaxValue, EXPANDED_DIMS) - 9}
 												font-size="10.5"
 												text-anchor="middle"
-												fill={colorBySeries.get(entry.name) ?? colorAt(0)}
+												fill={colorForCategory(entry.name)}
 											>
 												{value}
 											</text>
@@ -523,11 +642,11 @@
 						</div>
 					{/if}
 					<div class="flex flex-wrap gap-2 text-xs">
-						{#each visibleExpandedSeries as entry}
+						{#each visibleExpandedCurrentSeries as entry}
 							<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5">
 								<span
 									class="inline-block size-2 rounded-full"
-									style={`background-color: ${colorBySeries.get(entry.name) ?? colorAt(0)};`}
+									style={`background-color: ${colorForCategory(entry.name)};`}
 								></span>
 								{entry.name}
 							</span>

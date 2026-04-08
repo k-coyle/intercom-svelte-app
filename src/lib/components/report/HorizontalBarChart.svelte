@@ -1,10 +1,29 @@
 <script lang="ts">
 	import Maximize2Icon from '@lucide/svelte/icons/maximize-2';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import {
+		colorForCategory,
+		colorWithAlpha,
+		sortEntriesByValueThenLabel
+	} from '$lib/components/report/chartPalette';
+
+	type ChartItem = { label: string; value: number };
+	type DisplayRow = {
+		label: string;
+		color: string;
+		currentValue: number;
+		comparisonValue: number;
+	};
 
 	export let title = '';
 	export let expandedTitle = '';
-	export let items: Array<{ label: string; value: number }> = [];
+	export let items: ChartItem[] = [];
+	export let comparisonItems: ChartItem[] = [];
+	export let showComparison = false;
+	export let currentPeriodLabel = 'Current Period';
+	export let comparisonPeriodLabel = 'Comparison Period';
+	export let currentRangeLabel = '';
+	export let comparisonRangeLabel = '';
 	export let xAxisLabel = 'Count';
 	export let yAxisLabel = 'Category';
 	export let emptyText = 'No data available for the selected filters.';
@@ -12,28 +31,14 @@
 	export let expandable = true;
 	export let defaultVisibleCount = 5;
 
-	const PALETTE = [
-		'var(--color-chart-1, #e76f51)',
-		'var(--color-chart-2, #2a9d8f)',
-		'var(--color-chart-3, #457b9d)',
-		'var(--color-chart-4, #e9c46a)',
-		'var(--color-chart-5, #f4a261)',
-		'#8ecae6',
-		'#6d597a',
-		'#43aa8b',
-		'#f94144',
-		'#577590'
-	];
-
-	function colorAt(index: number): string {
-		return PALETTE[index % PALETTE.length];
-	}
+	const PERIOD_SWATCH_CURRENT = '#334155';
+	const PERIOD_SWATCH_COMPARISON = 'rgba(51, 65, 85, 0.45)';
 
 	function setLabelSelected(label: string, selected: boolean): void {
 		if (selected) {
-			selectedLabels = sorted
-				.map((item) => item.label)
-				.filter((entry) => entry === label || selectedLabels.includes(entry));
+			selectedLabels = selectableLabels.filter(
+				(entry) => entry === label || selectedLabels.includes(entry)
+			);
 			return;
 		}
 
@@ -43,11 +48,31 @@
 	}
 
 	function selectTopCategories(): void {
-		selectedLabels = sorted.slice(0, defaultVisibleCount).map((item) => item.label);
+		selectedLabels = defaultInlineLabels;
 	}
 
 	function selectAllCategories(): void {
-		selectedLabels = sorted.map((item) => item.label);
+		selectedLabels = selectableLabels;
+	}
+
+	function rowForLabel(label: string): DisplayRow {
+		return {
+			label,
+			color: colorForCategory(label),
+			currentValue: currentMap.get(label) ?? 0,
+			comparisonValue: comparisonMap.get(label) ?? 0
+		};
+	}
+
+	function maxRowValue(rows: DisplayRow[]): number {
+		return Math.max(
+			0,
+			...rows.flatMap((row) =>
+				showComparisonData
+					? [row.currentValue, row.comparisonValue]
+					: [row.currentValue]
+			)
+		);
 	}
 
 	let expandedOpen = false;
@@ -55,40 +80,38 @@
 	let labelsSignature = '';
 
 	function openExpanded() {
-		if (!expandable || sorted.length === 0) return;
+		if (!expandable || selectableLabels.length === 0) return;
 		expandedOpen = true;
 	}
 
-	$: sorted = [...items].sort((a, b) => {
-		if (b.value !== a.value) return b.value - a.value;
-		return a.label.localeCompare(b.label);
-	});
-	$: visibleInlineItems = sorted.slice(0, defaultVisibleCount);
-	$: hasHiddenItems = sorted.length > visibleInlineItems.length;
-	$: nextLabelsSignature = sorted.map((item) => item.label).join('\u0000');
+	$: sortedCurrent = sortEntriesByValueThenLabel(items);
+	$: sortedComparison = sortEntriesByValueThenLabel(comparisonItems);
+	$: showComparisonData = showComparison && sortedComparison.length > 0;
+	$: currentMap = new Map(sortedCurrent.map((item) => [item.label, item.value]));
+	$: comparisonMap = new Map(sortedComparison.map((item) => [item.label, item.value]));
+	$: currentLabels = sortedCurrent.map((item) => item.label);
+	$: comparisonOnlyLabels = showComparisonData
+		? sortedComparison.map((item) => item.label).filter((label) => !currentMap.has(label))
+		: [];
+	$: selectableLabels = [...currentLabels, ...comparisonOnlyLabels];
+	$: defaultInlineLabels =
+		currentLabels.length > 0
+			? currentLabels.slice(0, defaultVisibleCount)
+			: selectableLabels.slice(0, defaultVisibleCount);
+	$: hasHiddenItems = selectableLabels.length > defaultInlineLabels.length;
+	$: nextLabelsSignature = selectableLabels.join('\u0000');
 	$: if (nextLabelsSignature !== labelsSignature) {
-		const available = new Set(sorted.map((item) => item.label));
+		const available = new Set(selectableLabels);
 		const retained = selectedLabels.filter((label) => available.has(label));
-		selectedLabels =
-			retained.length > 0
-				? sorted.map((item) => item.label).filter((label) => retained.includes(label))
-				: visibleInlineItems.map((item) => item.label);
+		selectedLabels = retained.length > 0 ? selectableLabels.filter((label) => retained.includes(label)) : defaultInlineLabels;
 		labelsSignature = nextLabelsSignature;
 	}
 	$: selectedLabelSet = new Set(selectedLabels);
-	$: visibleExpandedItems = sorted.filter((item) => selectedLabelSet.has(item.label));
-	$: inlineMaxValue = Math.max(0, ...visibleInlineItems.map((item) => item.value));
-	$: expandedMaxValue = Math.max(0, ...visibleExpandedItems.map((item) => item.value));
+	$: visibleInlineRows = defaultInlineLabels.map(rowForLabel);
+	$: visibleExpandedRows = selectableLabels.filter((label) => selectedLabelSet.has(label)).map(rowForLabel);
+	$: inlineMaxValue = maxRowValue(visibleInlineRows);
+	$: expandedMaxValue = maxRowValue(visibleExpandedRows);
 	$: resolvedExpandedTitle = expandedTitle || title || 'Chart';
-	$: colorByLabel = new Map(sorted.map((item, index) => [item.label, colorAt(index)]));
-	$: inlineLegendItems = visibleInlineItems.map((item) => ({
-		...item,
-		color: colorByLabel.get(item.label) ?? colorAt(0)
-	}));
-	$: expandedLegendItems = visibleExpandedItems.map((item) => ({
-		...item,
-		color: colorByLabel.get(item.label) ?? colorAt(0)
-	}));
 </script>
 
 <div class="space-y-3">
@@ -98,7 +121,7 @@
 		{:else}
 			<span></span>
 		{/if}
-		{#if sorted.length > 0 && expandable}
+		{#if selectableLabels.length > 0 && expandable}
 			<button
 				type="button"
 				class="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs hover:bg-accent"
@@ -111,51 +134,91 @@
 		{/if}
 	</div>
 
-	{#if sorted.length === 0}
+	{#if selectableLabels.length === 0}
 		<div class="flex h-[220px] items-center justify-center rounded-md bg-muted/30 text-sm text-muted-foreground">
 			{emptyText}
 		</div>
 	{:else}
+		{#if showComparisonData}
+			<div class="rounded-md border bg-muted/20 p-3 text-xs">
+				<div class="flex flex-wrap gap-4">
+					<span class="inline-flex items-center gap-2">
+						<span class="inline-block h-2.5 w-4 rounded-sm" style={`background-color: ${PERIOD_SWATCH_CURRENT};`}></span>
+						{currentPeriodLabel}
+					</span>
+					<span class="inline-flex items-center gap-2">
+						<span class="inline-block h-2.5 w-4 rounded-sm" style={`background-color: ${PERIOD_SWATCH_COMPARISON};`}></span>
+						{comparisonPeriodLabel}
+					</span>
+				</div>
+				<div class="mt-2 grid gap-1 text-muted-foreground sm:grid-cols-2">
+					<span>{currentPeriodLabel}: {currentRangeLabel}</span>
+					<span>{comparisonPeriodLabel}: {comparisonRangeLabel}</span>
+				</div>
+			</div>
+		{/if}
+
 		<button
 			type="button"
 			class="block w-full cursor-zoom-in text-left"
 			onclick={openExpanded}
 			disabled={!expandable}
 		>
-			<div class="space-y-2 bg-background p-2">
-				{#each visibleInlineItems as item}
-					<div class="space-y-1">
+			<div class="space-y-3 bg-background p-2">
+				{#each visibleInlineRows as row}
+					<div class="space-y-1.5">
 						<div class="flex items-center justify-between gap-2 text-xs">
-							<p class="truncate font-medium">{item.label}</p>
-							<p class="shrink-0 text-muted-foreground">{item.value}</p>
+							<p class="truncate font-medium">{row.label}</p>
 						</div>
-						<div class="h-2 rounded bg-muted">
-							<div
-								class="h-2 rounded"
-								style={`width: ${inlineMaxValue === 0 ? 0 : (item.value / inlineMaxValue) * 100}%; background-color: ${colorByLabel.get(item.label) ?? colorAt(0)};`}
-							></div>
+						<div class="space-y-1.5">
+							<div class="flex items-center gap-2 text-[11px]">
+								{#if showComparisonData}
+									<span class="w-20 shrink-0 text-muted-foreground">{currentPeriodLabel}</span>
+								{/if}
+								<div class="h-2 flex-1 rounded bg-muted">
+									<div
+										class="h-2 rounded"
+										style={`width: ${inlineMaxValue === 0 ? 0 : (row.currentValue / inlineMaxValue) * 100}%; background-color: ${row.color};`}
+									></div>
+								</div>
+								<p class="w-12 shrink-0 text-right text-muted-foreground">{row.currentValue}</p>
+							</div>
+							{#if showComparisonData}
+								<div class="flex items-center gap-2 text-[11px]">
+									<span class="w-20 shrink-0 text-muted-foreground">{comparisonPeriodLabel}</span>
+									<div class="h-2 flex-1 rounded bg-muted">
+										<div
+											class="h-2 rounded border"
+											style={`width: ${inlineMaxValue === 0 ? 0 : (row.comparisonValue / inlineMaxValue) * 100}%; background-color: ${colorWithAlpha(row.color, 0.45)}; border-color: ${colorWithAlpha(row.color, 0.75)};`}
+										></div>
+									</div>
+									<p class="w-12 shrink-0 text-right text-muted-foreground">{row.comparisonValue}</p>
+								</div>
+							{/if}
 						</div>
 					</div>
 				{/each}
 			</div>
 		</button>
+
 		{#if hasHiddenItems}
 			<p class="text-xs text-muted-foreground">
-				Showing top {visibleInlineItems.length} of {sorted.length} categories. Expand to choose more.
+				Showing top {visibleInlineRows.length} of {selectableLabels.length} categories. Expand to choose more.
 			</p>
 		{/if}
+
 		<div class="flex flex-wrap gap-2 text-xs">
-			{#each inlineLegendItems as item}
+			{#each visibleInlineRows as row}
 				<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5">
-					<span class="inline-block size-2 rounded-full" style={`background-color: ${item.color};`}></span>
-					{item.label}
+					<span class="inline-block size-2 rounded-full" style={`background-color: ${row.color};`}></span>
+					{row.label}
 				</span>
 			{/each}
 		</div>
 	{/if}
 </div>
 
-{#if expandable && sorted.length > 0}
+{#if expandable && selectableLabels.length > 0}
 	<Dialog.Root bind:open={expandedOpen}>
 		<Dialog.Content class="h-[90vh] max-h-[90vh] w-[95vw] max-w-[95vw] overflow-hidden p-4 sm:max-w-[95vw]">
 			<Dialog.Header>
@@ -170,11 +233,27 @@
 							{/each}
 						</div>
 					{/if}
+					{#if showComparisonData}
+						<div class="rounded-md border bg-muted/20 p-3 text-xs">
+							<div class="flex flex-wrap gap-4">
+								<span class="inline-flex items-center gap-2">
+									<span class="inline-block h-2.5 w-4 rounded-sm" style={`background-color: ${PERIOD_SWATCH_CURRENT};`}></span>
+									{currentPeriodLabel}
+								</span>
+								<span class="inline-flex items-center gap-2">
+									<span class="inline-block h-2.5 w-4 rounded-sm" style={`background-color: ${PERIOD_SWATCH_COMPARISON};`}></span>
+									{comparisonPeriodLabel}
+								</span>
+							</div>
+							<div class="mt-2 grid gap-1 text-muted-foreground sm:grid-cols-2">
+								<span>{currentPeriodLabel}: {currentRangeLabel}</span>
+								<span>{comparisonPeriodLabel}: {comparisonRangeLabel}</span>
+							</div>
+						</div>
+					{/if}
 					<div class="rounded-md border bg-muted/20 p-3">
 						<div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-							<span>
-								Showing {visibleExpandedItems.length} of {sorted.length} categories.
-							</span>
+							<span>Showing {visibleExpandedRows.length} of {selectableLabels.length} categories.</span>
 							{#if hasHiddenItems}
 								<div class="flex items-center gap-2">
 									<button
@@ -196,56 +275,74 @@
 						</div>
 						{#if hasHiddenItems}
 							<div class="mt-3 grid max-h-40 gap-2 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
-								{#each sorted as item}
+								{#each selectableLabels as label}
 									<label class="flex items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs">
 										<input
 											type="checkbox"
-											checked={selectedLabels.includes(item.label)}
+											checked={selectedLabels.includes(label)}
 											onchange={(event) =>
-												setLabelSelected(
-													item.label,
-													(event.currentTarget as HTMLInputElement).checked
-												)}
+												setLabelSelected(label, (event.currentTarget as HTMLInputElement).checked)}
 										/>
 										<span
 											class="inline-block size-2 rounded-full"
-											style={`background-color: ${colorByLabel.get(item.label) ?? colorAt(0)};`}
+											style={`background-color: ${colorForCategory(label)};`}
 										></span>
-										<span class="truncate">{item.label}</span>
+										<span class="truncate">{label}</span>
 									</label>
 								{/each}
 							</div>
 						{/if}
 					</div>
-					{#if visibleExpandedItems.length === 0}
+					{#if visibleExpandedRows.length === 0}
 						<div class="flex h-[220px] items-center justify-center rounded-md bg-muted/30 text-sm text-muted-foreground">
 							Select at least one category to display the chart.
 						</div>
 					{:else}
-						{#each visibleExpandedItems as item}
-							<div class="space-y-1">
-								<div class="flex items-center justify-between gap-2 text-sm">
-									<p class="truncate font-medium">{item.label}</p>
-									<p class="shrink-0 text-muted-foreground">{item.value}</p>
+						<div class="space-y-3">
+							{#each visibleExpandedRows as row}
+								<div class="space-y-2">
+									<div class="flex items-center justify-between gap-2 text-sm">
+										<p class="truncate font-medium">{row.label}</p>
+									</div>
+									<div class="space-y-2">
+										<div class="flex items-center gap-3 text-xs">
+											{#if showComparisonData}
+												<span class="w-24 shrink-0 text-muted-foreground">{currentPeriodLabel}</span>
+											{/if}
+											<div class="h-3 flex-1 rounded bg-muted">
+												<div
+													class="h-3 rounded"
+													style={`width: ${expandedMaxValue === 0 ? 0 : (row.currentValue / expandedMaxValue) * 100}%; background-color: ${row.color};`}
+												></div>
+											</div>
+											<p class="w-14 shrink-0 text-right text-muted-foreground">{row.currentValue}</p>
+										</div>
+										{#if showComparisonData}
+											<div class="flex items-center gap-3 text-xs">
+												<span class="w-24 shrink-0 text-muted-foreground">{comparisonPeriodLabel}</span>
+												<div class="h-3 flex-1 rounded bg-muted">
+													<div
+														class="h-3 rounded border"
+														style={`width: ${expandedMaxValue === 0 ? 0 : (row.comparisonValue / expandedMaxValue) * 100}%; background-color: ${colorWithAlpha(row.color, 0.45)}; border-color: ${colorWithAlpha(row.color, 0.75)};`}
+													></div>
+												</div>
+												<p class="w-14 shrink-0 text-right text-muted-foreground">{row.comparisonValue}</p>
+											</div>
+										{/if}
+									</div>
 								</div>
-								<div class="h-3 rounded bg-muted">
-									<div
-										class="h-3 rounded"
-										style={`width: ${expandedMaxValue === 0 ? 0 : (item.value / expandedMaxValue) * 100}%; background-color: ${colorByLabel.get(item.label) ?? colorAt(0)};`}
-									></div>
-								</div>
-							</div>
-						{/each}
+							{/each}
+						</div>
 					{/if}
 					<div class="flex items-center justify-between text-xs text-muted-foreground">
 						<span>{yAxisLabel}</span>
 						<span>{xAxisLabel}</span>
 					</div>
 					<div class="flex flex-wrap gap-2 text-xs">
-						{#each expandedLegendItems as item}
+						{#each visibleExpandedRows as row}
 							<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5">
-								<span class="inline-block size-2 rounded-full" style={`background-color: ${item.color};`}></span>
-								{item.label}
+								<span class="inline-block size-2 rounded-full" style={`background-color: ${row.color};`}></span>
+								{row.label}
 							</span>
 						{/each}
 					</div>

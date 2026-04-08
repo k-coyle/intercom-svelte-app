@@ -45,6 +45,16 @@
 		onRemove: () => void;
 	};
 
+	type EnrollmentChartCompareKey =
+		| 'newProgramBar'
+		| 'newEmployerBar'
+		| 'newProgramLine'
+		| 'newEmployerLine'
+		| 'totalProgramBar'
+		| 'totalEmployerBar'
+		| 'totalProgramLine'
+		| 'totalEmployerLine';
+
 	type LineSeriesResult = {
 		dates: string[];
 		series: Array<{ name: string; values: Array<number | null> }>;
@@ -78,6 +88,20 @@
 	const COMPARISON_ENABLED_BUTTON_CLASS = 'w-full bg-blue-900 text-white hover:bg-blue-800 border-blue-900';
 	const COMPARISON_DISABLED_BUTTON_CLASS =
 		'w-full border-blue-300 text-blue-900 hover:bg-blue-50';
+	const CHART_COMPARE_ACTIVE_CLASS =
+		'border-slate-900 bg-slate-900 text-white hover:bg-slate-800';
+	const CHART_COMPARE_INACTIVE_CLASS =
+		'border-slate-300 text-slate-700 hover:bg-slate-50';
+	const DEFAULT_CHART_COMPARISON: Record<EnrollmentChartCompareKey, boolean> = {
+		newProgramBar: false,
+		newEmployerBar: false,
+		newProgramLine: false,
+		newEmployerLine: false,
+		totalProgramBar: false,
+		totalEmployerBar: false,
+		totalProgramLine: false,
+		totalEmployerLine: false
+	};
 
 	let rangeStart = '';
 	let rangeEnd = '';
@@ -244,20 +268,23 @@
 		return new Date(unix * 1000).toISOString().slice(0, 10);
 	}
 
-		function buildDateSeries(
-			rows: EnrollmentRow[],
-			dimension: 'program' | 'employer',
-			mode: 'selected-range' | 'from-first-enrollment' | 'selected-range-cumulative'
-		): LineSeriesResult {
-			const endUnixExclusive = toUnixEndExclusive(effectiveEndDate() ?? '');
-			if (endUnixExclusive == null) return { dates: [], series: [], xAxisLabel: 'Date' };
+	function buildDateSeries(
+		rows: EnrollmentRow[],
+		dimension: 'program' | 'employer',
+		mode: 'selected-range' | 'from-first-enrollment' | 'selected-range-cumulative',
+		range: { startDate: string; endDate: string } | null = null
+	): LineSeriesResult {
+		const startDateIso = range?.startDate ?? effectiveStartDate() ?? '';
+		const endDateIso = range?.endDate ?? effectiveEndDate() ?? '';
+		const endUnixExclusive = toUnixEndExclusive(endDateIso);
+		if (endUnixExclusive == null) return { dates: [], series: [], xAxisLabel: 'Date' };
 
-			let startUnix: number | null = null;
-			if (mode === 'selected-range' || mode === 'selected-range-cumulative') {
-				startUnix = toUnixStart(effectiveStartDate() ?? '');
-			} else {
-				const source = rowsAfterNonDateFilters(loadedRows)
-					.map((row) => row.enrollmentAt)
+		let startUnix: number | null = null;
+		if (mode === 'selected-range' || mode === 'selected-range-cumulative') {
+			startUnix = toUnixStart(startDateIso);
+		} else {
+			const source = rowsAfterNonDateFilters(loadedRows)
+				.map((row) => row.enrollmentAt)
 					.filter((value): value is number => value != null && Number.isFinite(value));
 			if (source.length > 0) {
 				startUnix = Math.min(...source);
@@ -364,6 +391,14 @@
 		};
 	}
 
+	function resetChartComparisons(): void {
+		chartComparison = { ...DEFAULT_CHART_COMPARISON };
+	}
+
+	function toggleChartComparison(key: EnrollmentChartCompareKey): void {
+		chartComparison = { ...chartComparison, [key]: !chartComparison[key] };
+	}
+
 	function tableRows() {
 		const startUnix = toUnixStart(effectiveStartDate() ?? '');
 		const endDate = effectiveEndDate() ?? '';
@@ -393,16 +428,17 @@
 		selectedEmployers = selectedEmployers.filter((employer) => employerOptions.includes(employer));
 	}
 
-	function resetFilters() {
-		comparisonEnabled = false;
-		comparisonMode = 'previous';
-		comparisonStart = '';
-		comparisonEnd = '';
-		lastAutoPreviousStart = '';
-		lastAutoPreviousEnd = '';
-		selectedPrograms = [];
-		selectedEmployers = [];
-	}
+		function resetFilters() {
+			comparisonEnabled = false;
+			comparisonMode = 'previous';
+			comparisonStart = '';
+			comparisonEnd = '';
+			lastAutoPreviousStart = '';
+			lastAutoPreviousEnd = '';
+			selectedPrograms = [];
+			selectedEmployers = [];
+			resetChartComparisons();
+		}
 
 	function clearDateRange() {
 		rangeStart = '';
@@ -631,6 +667,7 @@
 	}
 
 	async function runReport(): Promise<void> {
+		resetChartComparisons();
 		if (!rangeStart || !rangeEnd) {
 			error = 'Please select a reporting date range.';
 			return;
@@ -686,11 +723,16 @@
 
 	let totalRows: EnrollmentRow[] = [];
 	let newRows: EnrollmentRow[] = [];
+	let comparisonTotalRows: EnrollmentRow[] = [];
 	let comparisonNewRows: EnrollmentRow[] = [];
 	let totalProgramBar: Array<{ label: string; value: number }> = [];
 	let totalEmployerBar: Array<{ label: string; value: number }> = [];
 	let newProgramBar: Array<{ label: string; value: number }> = [];
 	let newEmployerBar: Array<{ label: string; value: number }> = [];
+	let comparisonTotalProgramBar: Array<{ label: string; value: number }> = [];
+	let comparisonTotalEmployerBar: Array<{ label: string; value: number }> = [];
+	let comparisonNewProgramBar: Array<{ label: string; value: number }> = [];
+	let comparisonNewEmployerBar: Array<{ label: string; value: number }> = [];
 	let totalProgramSeries: LineSeriesResult = {
 		dates: [],
 		series: [],
@@ -711,10 +753,33 @@
 		series: [],
 		xAxisLabel: 'Date'
 	};
+	let comparisonTotalProgramSeries: LineSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
+	let comparisonTotalEmployerSeries: LineSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
+	let comparisonNewProgramSeries: LineSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
+	let comparisonNewEmployerSeries: LineSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
 	let table: Array<Record<string, string>> = [];
 	let chips: FilterChip[] = [];
 	let modalFilterLabels: string[] = [];
 	let hasFilterData = false;
+	let chartComparison = { ...DEFAULT_CHART_COMPARISON };
+	let currentRangeLabel = '';
+	let comparisonRangeLabel = '';
 
 	$: {
 		const nextSignature = comparisonSignature();
@@ -733,6 +798,10 @@
 			activeComparisonKey === comparisonLoadedKey;
 	}
 
+	$: if (!comparisonDisplayEnabled && Object.values(chartComparison).some(Boolean)) {
+		resetChartComparisons();
+	}
+
 	$: {
 		loadedRows;
 		summary;
@@ -747,23 +816,74 @@
 		selectedPrograms;
 		selectedEmployers;
 
-		const currentStart = effectiveStartDate() ?? '';
-		const currentEnd = effectiveEndDate() ?? '';
-		totalRows = totalEnrollmentRows(loadedRows, currentEnd);
-		newRows = newEnrollmentRows(loadedRows, currentStart, currentEnd);
-		const comparisonRange = resolvedComparisonRange();
-		comparisonNewRows =
-			comparisonEnabled && comparisonRange
-				? newEnrollmentRows(comparisonLoadedRows, comparisonRange.startDate, comparisonRange.endDate)
-				: [];
+			const currentStart = effectiveStartDate() ?? '';
+			const currentEnd = effectiveEndDate() ?? '';
+			currentRangeLabel = currentStart && currentEnd ? `${currentStart} to ${currentEnd}` : '';
+			totalRows = totalEnrollmentRows(loadedRows, currentEnd);
+			newRows = newEnrollmentRows(loadedRows, currentStart, currentEnd);
+			const comparisonRange = resolvedComparisonRange();
+			comparisonRangeLabel =
+				comparisonEnabled && comparisonRange
+					? `${comparisonRange.startDate} to ${comparisonRange.endDate}`
+					: '';
+			comparisonTotalRows =
+				comparisonEnabled && comparisonRange
+					? totalEnrollmentRows(comparisonLoadedRows, comparisonRange.endDate)
+					: [];
+			comparisonNewRows =
+				comparisonEnabled && comparisonRange
+					? newEnrollmentRows(comparisonLoadedRows, comparisonRange.startDate, comparisonRange.endDate)
+					: [];
 			totalProgramBar = buildBarData(totalRows, 'program');
 			totalEmployerBar = buildBarData(totalRows, 'employer');
 			newProgramBar = buildBarData(newRows, 'program');
 			newEmployerBar = buildBarData(newRows, 'employer');
-			totalProgramSeries = buildDateSeries(totalRows, 'program', 'selected-range-cumulative');
-			totalEmployerSeries = buildDateSeries(totalRows, 'employer', 'selected-range-cumulative');
-			newProgramSeries = buildDateSeries(newRows, 'program', 'selected-range');
-			newEmployerSeries = buildDateSeries(newRows, 'employer', 'selected-range');
+			comparisonTotalProgramBar = buildBarData(comparisonTotalRows, 'program');
+			comparisonTotalEmployerBar = buildBarData(comparisonTotalRows, 'employer');
+			comparisonNewProgramBar = buildBarData(comparisonNewRows, 'program');
+			comparisonNewEmployerBar = buildBarData(comparisonNewRows, 'employer');
+			totalProgramSeries = buildDateSeries(totalRows, 'program', 'selected-range-cumulative', {
+				startDate: currentStart,
+				endDate: currentEnd
+			});
+			totalEmployerSeries = buildDateSeries(totalRows, 'employer', 'selected-range-cumulative', {
+				startDate: currentStart,
+				endDate: currentEnd
+			});
+			newProgramSeries = buildDateSeries(newRows, 'program', 'selected-range', {
+				startDate: currentStart,
+				endDate: currentEnd
+			});
+			newEmployerSeries = buildDateSeries(newRows, 'employer', 'selected-range', {
+				startDate: currentStart,
+				endDate: currentEnd
+			});
+			comparisonTotalProgramSeries =
+				comparisonEnabled && comparisonRange
+					? buildDateSeries(
+							comparisonTotalRows,
+							'program',
+							'selected-range-cumulative',
+							comparisonRange
+						)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
+			comparisonTotalEmployerSeries =
+				comparisonEnabled && comparisonRange
+					? buildDateSeries(
+							comparisonTotalRows,
+							'employer',
+							'selected-range-cumulative',
+							comparisonRange
+						)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
+			comparisonNewProgramSeries =
+				comparisonEnabled && comparisonRange
+					? buildDateSeries(comparisonNewRows, 'program', 'selected-range', comparisonRange)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
+			comparisonNewEmployerSeries =
+				comparisonEnabled && comparisonRange
+					? buildDateSeries(comparisonNewRows, 'employer', 'selected-range', comparisonRange)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
 			table = tableRows();
 			chips = activeFilterChips();
 			modalFilterLabels = chips.map((chip) => chip.label);
@@ -919,12 +1039,28 @@
 				comparisonTrend="higher_is_better"
 			/>
 			<Card.Root>
-				<Card.Header class="pb-2">
+				<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
 					<Card.Title class="text-base">New Enrollments by Program</Card.Title>
+					{#if comparisonDisplayEnabled}
+						<Button
+							size="sm"
+							variant={chartComparison.newProgramBar ? 'default' : 'outline'}
+							class={chartComparison.newProgramBar
+								? CHART_COMPARE_ACTIVE_CLASS
+								: CHART_COMPARE_INACTIVE_CLASS}
+							onclick={() => toggleChartComparison('newProgramBar')}
+						>
+							{chartComparison.newProgramBar ? 'Comparing' : 'Compare'}
+						</Button>
+					{/if}
 				</Card.Header>
 				<Card.Content>
 					<HorizontalBarChart
 						items={newProgramBar}
+						comparisonItems={comparisonNewProgramBar}
+						showComparison={chartComparison.newProgramBar}
+						currentRangeLabel={currentRangeLabel}
+						comparisonRangeLabel={comparisonRangeLabel}
 						xAxisLabel="Enrollments"
 						yAxisLabel="Program"
 						expandedTitle="New Enrollments by Program"
@@ -933,12 +1069,28 @@
 				</Card.Content>
 			</Card.Root>
 			<Card.Root>
-				<Card.Header class="pb-2">
+				<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
 					<Card.Title class="text-base">New Enrollments by Employer</Card.Title>
+					{#if comparisonDisplayEnabled}
+						<Button
+							size="sm"
+							variant={chartComparison.newEmployerBar ? 'default' : 'outline'}
+							class={chartComparison.newEmployerBar
+								? CHART_COMPARE_ACTIVE_CLASS
+								: CHART_COMPARE_INACTIVE_CLASS}
+							onclick={() => toggleChartComparison('newEmployerBar')}
+						>
+							{chartComparison.newEmployerBar ? 'Comparing' : 'Compare'}
+						</Button>
+					{/if}
 				</Card.Header>
 				<Card.Content>
 					<HorizontalBarChart
 						items={newEmployerBar}
+						comparisonItems={comparisonNewEmployerBar}
+						showComparison={chartComparison.newEmployerBar}
+						currentRangeLabel={currentRangeLabel}
+						comparisonRangeLabel={comparisonRangeLabel}
 						xAxisLabel="Enrollments"
 						yAxisLabel="Employer"
 						expandedTitle="New Enrollments by Employer"
@@ -947,13 +1099,29 @@
 				</Card.Content>
 			</Card.Root>
 			<Card.Root>
-				<Card.Header class="pb-2">
+				<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
 					<Card.Title class="text-base">New Enrollments Trend by Program</Card.Title>
+					{#if comparisonDisplayEnabled}
+						<Button
+							size="sm"
+							variant={chartComparison.newProgramLine ? 'default' : 'outline'}
+							class={chartComparison.newProgramLine
+								? CHART_COMPARE_ACTIVE_CLASS
+								: CHART_COMPARE_INACTIVE_CLASS}
+							onclick={() => toggleChartComparison('newProgramLine')}
+						>
+							{chartComparison.newProgramLine ? 'Comparing' : 'Compare'}
+						</Button>
+					{/if}
 				</Card.Header>
 				<Card.Content>
 					<MultiSeriesLineChart
 						dates={newProgramSeries.dates}
 						series={newProgramSeries.series}
+						comparisonSeries={comparisonNewProgramSeries.series}
+						showComparison={chartComparison.newProgramLine}
+						currentRangeLabel={currentRangeLabel}
+						comparisonRangeLabel={comparisonRangeLabel}
 						yAxisLabel="Enrollments"
 						xAxisLabel={newProgramSeries.xAxisLabel}
 						expandedTitle="New Enrollments Trend by Program"
@@ -962,13 +1130,29 @@
 				</Card.Content>
 			</Card.Root>
 			<Card.Root>
-				<Card.Header class="pb-2">
+				<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
 					<Card.Title class="text-base">New Enrollments Trend by Employer</Card.Title>
+					{#if comparisonDisplayEnabled}
+						<Button
+							size="sm"
+							variant={chartComparison.newEmployerLine ? 'default' : 'outline'}
+							class={chartComparison.newEmployerLine
+								? CHART_COMPARE_ACTIVE_CLASS
+								: CHART_COMPARE_INACTIVE_CLASS}
+							onclick={() => toggleChartComparison('newEmployerLine')}
+						>
+							{chartComparison.newEmployerLine ? 'Comparing' : 'Compare'}
+						</Button>
+					{/if}
 				</Card.Header>
 				<Card.Content>
 					<MultiSeriesLineChart
 						dates={newEmployerSeries.dates}
 						series={newEmployerSeries.series}
+						comparisonSeries={comparisonNewEmployerSeries.series}
+						showComparison={chartComparison.newEmployerLine}
+						currentRangeLabel={currentRangeLabel}
+						comparisonRangeLabel={comparisonRangeLabel}
 						yAxisLabel="Enrollments"
 						xAxisLabel={newEmployerSeries.xAxisLabel}
 						expandedTitle="New Enrollments Trend by Employer"
@@ -981,12 +1165,28 @@
 		<div class="space-y-4">
 			<KpiCard title="Total Enrollments" value={totalRows.length} />
 			<Card.Root>
-				<Card.Header class="pb-2">
+				<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
 					<Card.Title class="text-base">Total Enrollments by Program</Card.Title>
+					{#if comparisonDisplayEnabled}
+						<Button
+							size="sm"
+							variant={chartComparison.totalProgramBar ? 'default' : 'outline'}
+							class={chartComparison.totalProgramBar
+								? CHART_COMPARE_ACTIVE_CLASS
+								: CHART_COMPARE_INACTIVE_CLASS}
+							onclick={() => toggleChartComparison('totalProgramBar')}
+						>
+							{chartComparison.totalProgramBar ? 'Comparing' : 'Compare'}
+						</Button>
+					{/if}
 				</Card.Header>
 				<Card.Content>
 					<HorizontalBarChart
 						items={totalProgramBar}
+						comparisonItems={comparisonTotalProgramBar}
+						showComparison={chartComparison.totalProgramBar}
+						currentRangeLabel={currentRangeLabel}
+						comparisonRangeLabel={comparisonRangeLabel}
 						xAxisLabel="Enrollments"
 						yAxisLabel="Program"
 						expandedTitle="Total Enrollments by Program"
@@ -995,12 +1195,28 @@
 				</Card.Content>
 			</Card.Root>
 			<Card.Root>
-				<Card.Header class="pb-2">
+				<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
 					<Card.Title class="text-base">Total Enrollments by Employer</Card.Title>
+					{#if comparisonDisplayEnabled}
+						<Button
+							size="sm"
+							variant={chartComparison.totalEmployerBar ? 'default' : 'outline'}
+							class={chartComparison.totalEmployerBar
+								? CHART_COMPARE_ACTIVE_CLASS
+								: CHART_COMPARE_INACTIVE_CLASS}
+							onclick={() => toggleChartComparison('totalEmployerBar')}
+						>
+							{chartComparison.totalEmployerBar ? 'Comparing' : 'Compare'}
+						</Button>
+					{/if}
 				</Card.Header>
 				<Card.Content>
 					<HorizontalBarChart
 						items={totalEmployerBar}
+						comparisonItems={comparisonTotalEmployerBar}
+						showComparison={chartComparison.totalEmployerBar}
+						currentRangeLabel={currentRangeLabel}
+						comparisonRangeLabel={comparisonRangeLabel}
 						xAxisLabel="Enrollments"
 						yAxisLabel="Employer"
 						expandedTitle="Total Enrollments by Employer"
@@ -1009,13 +1225,29 @@
 				</Card.Content>
 			</Card.Root>
 			<Card.Root>
-				<Card.Header class="pb-2">
+				<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
 					<Card.Title class="text-base">Total Enrollments Trend by Program</Card.Title>
+					{#if comparisonDisplayEnabled}
+						<Button
+							size="sm"
+							variant={chartComparison.totalProgramLine ? 'default' : 'outline'}
+							class={chartComparison.totalProgramLine
+								? CHART_COMPARE_ACTIVE_CLASS
+								: CHART_COMPARE_INACTIVE_CLASS}
+							onclick={() => toggleChartComparison('totalProgramLine')}
+						>
+							{chartComparison.totalProgramLine ? 'Comparing' : 'Compare'}
+						</Button>
+					{/if}
 				</Card.Header>
 				<Card.Content>
 					<MultiSeriesLineChart
 						dates={totalProgramSeries.dates}
 						series={totalProgramSeries.series}
+						comparisonSeries={comparisonTotalProgramSeries.series}
+						showComparison={chartComparison.totalProgramLine}
+						currentRangeLabel={currentRangeLabel}
+						comparisonRangeLabel={comparisonRangeLabel}
 						yAxisLabel="Enrollments"
 						xAxisLabel={totalProgramSeries.xAxisLabel}
 						expandedTitle="Total Enrollments Trend by Program"
@@ -1024,13 +1256,29 @@
 				</Card.Content>
 			</Card.Root>
 			<Card.Root>
-				<Card.Header class="pb-2">
+				<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
 					<Card.Title class="text-base">Total Enrollments Trend by Employer</Card.Title>
+					{#if comparisonDisplayEnabled}
+						<Button
+							size="sm"
+							variant={chartComparison.totalEmployerLine ? 'default' : 'outline'}
+							class={chartComparison.totalEmployerLine
+								? CHART_COMPARE_ACTIVE_CLASS
+								: CHART_COMPARE_INACTIVE_CLASS}
+							onclick={() => toggleChartComparison('totalEmployerLine')}
+						>
+							{chartComparison.totalEmployerLine ? 'Comparing' : 'Compare'}
+						</Button>
+					{/if}
 				</Card.Header>
 				<Card.Content>
 					<MultiSeriesLineChart
 						dates={totalEmployerSeries.dates}
 						series={totalEmployerSeries.series}
+						comparisonSeries={comparisonTotalEmployerSeries.series}
+						showComparison={chartComparison.totalEmployerLine}
+						currentRangeLabel={currentRangeLabel}
+						comparisonRangeLabel={comparisonRangeLabel}
 						yAxisLabel="Enrollments"
 						xAxisLabel={totalEmployerSeries.xAxisLabel}
 						expandedTitle="Total Enrollments Trend by Employer"

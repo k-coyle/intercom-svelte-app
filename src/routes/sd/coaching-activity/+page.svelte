@@ -50,6 +50,20 @@
 		onRemove: () => void;
 	};
 
+	type CoachingChartCompareKey =
+		| 'programBar'
+		| 'employerBar'
+		| 'channelBar'
+		| 'serviceCodeBar'
+		| 'coachBar'
+		| 'directionalityBar'
+		| 'programLine'
+		| 'employerLine'
+		| 'channelLine'
+		| 'serviceCodeLine'
+		| 'coachLine'
+		| 'directionalityLine';
+
 	type CoachingSummary = {
 		generatedAt: string;
 		startDate: string;
@@ -88,6 +102,24 @@
 	const COMPARISON_ENABLED_BUTTON_CLASS = 'w-full bg-blue-900 text-white hover:bg-blue-800 border-blue-900';
 	const COMPARISON_DISABLED_BUTTON_CLASS =
 		'w-full border-blue-300 text-blue-900 hover:bg-blue-50';
+	const CHART_COMPARE_ACTIVE_CLASS =
+		'border-slate-900 bg-slate-900 text-white hover:bg-slate-800';
+	const CHART_COMPARE_INACTIVE_CLASS =
+		'border-slate-300 text-slate-700 hover:bg-slate-50';
+	const DEFAULT_CHART_COMPARISON: Record<CoachingChartCompareKey, boolean> = {
+		programBar: false,
+		employerBar: false,
+		channelBar: false,
+		serviceCodeBar: false,
+		coachBar: false,
+		directionalityBar: false,
+		programLine: false,
+		employerLine: false,
+		channelLine: false,
+		serviceCodeLine: false,
+		coachLine: false,
+		directionalityLine: false
+	};
 
 	let rangeStart = '';
 	let rangeEnd = '';
@@ -276,9 +308,13 @@
 		return [...counts.entries()].map(([label, value]) => ({ label, value }));
 	}
 
-	function dateSeriesByDimension(rows: CoachingRow[], dimension: DimensionKey): TimeSeriesResult {
-		const startUnix = toUnixStart(effectiveStartDate() ?? '');
-		const endUnixExclusive = toUnixEndExclusive(effectiveEndDate() ?? '');
+	function dateSeriesByDimension(
+		rows: CoachingRow[],
+		dimension: DimensionKey,
+		range: { startDate: string; endDate: string } | null = null
+	): TimeSeriesResult {
+		const startUnix = toUnixStart(range?.startDate ?? effectiveStartDate() ?? '');
+		const endUnixExclusive = toUnixEndExclusive(range?.endDate ?? effectiveEndDate() ?? '');
 		if (startUnix == null || endUnixExclusive == null || endUnixExclusive <= startUnix) {
 			return { dates: [], series: [], xAxisLabel: 'Date' };
 		}
@@ -324,6 +360,14 @@
 		};
 	}
 
+	function resetChartComparisons(): void {
+		chartComparison = { ...DEFAULT_CHART_COMPARISON };
+	}
+
+	function toggleChartComparison(key: CoachingChartCompareKey): void {
+		chartComparison = { ...chartComparison, [key]: !chartComparison[key] };
+	}
+
 	function refreshFilterOptions() {
 		programOptions = uniqueListValues(loadedRows);
 		employerOptions = uniqueSorted(loadedRows.map((row) => row.employer));
@@ -353,6 +397,7 @@
 		selectedCoaches = [];
 		selectedChannels = [];
 		selectedDirectionality = [];
+		resetChartComparisons();
 	}
 
 	function clearDateRange() {
@@ -638,6 +683,7 @@
 	}
 
 	async function runReport(): Promise<void> {
+		resetChartComparisons();
 		if (!rangeStart || !rangeEnd) {
 			error = 'Please select a reporting date range.';
 			return;
@@ -705,6 +751,12 @@
 	let barsServiceCode: Array<{ label: string; value: number }> = [];
 	let barsCoach: Array<{ label: string; value: number }> = [];
 	let barsDirection: Array<{ label: string; value: number }> = [];
+	let comparisonBarsProgram: Array<{ label: string; value: number }> = [];
+	let comparisonBarsEmployer: Array<{ label: string; value: number }> = [];
+	let comparisonBarsChannel: Array<{ label: string; value: number }> = [];
+	let comparisonBarsServiceCode: Array<{ label: string; value: number }> = [];
+	let comparisonBarsCoach: Array<{ label: string; value: number }> = [];
+	let comparisonBarsDirection: Array<{ label: string; value: number }> = [];
 	let lineProgram: TimeSeriesResult = {
 		dates: [],
 		series: [],
@@ -735,10 +787,43 @@
 		series: [],
 		xAxisLabel: 'Date'
 	};
+	let comparisonLineProgram: TimeSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
+	let comparisonLineEmployer: TimeSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
+	let comparisonLineChannel: TimeSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
+	let comparisonLineServiceCode: TimeSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
+	let comparisonLineCoach: TimeSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
+	let comparisonLineDirection: TimeSeriesResult = {
+		dates: [],
+		series: [],
+		xAxisLabel: 'Date'
+	};
 	let table: Array<Record<string, string>> = [];
 	let chipItems: FilterChip[] = [];
 	let modalFilterLabels: string[] = [];
 	let hasFilterData = false;
+	let chartComparison = { ...DEFAULT_CHART_COMPARISON };
+	let currentRangeLabel = '';
+	let comparisonRangeLabel = '';
 
 	$: {
 		const nextSignature = comparisonSignature();
@@ -757,6 +842,10 @@
 			activeComparisonKey === comparisonLoadedKey;
 	}
 
+	$: if (!comparisonDisplayEnabled && Object.values(chartComparison).some(Boolean)) {
+		resetChartComparisons();
+	}
+
 	$: {
 		loadedRows;
 		comparisonLoadedRows;
@@ -770,14 +859,22 @@
 		selectedEmployers;
 		selectedServiceCodes;
 		selectedCoaches;
-		selectedChannels;
-		selectedDirectionality;
+			selectedChannels;
+			selectedDirectionality;
 
-		rows = filteredRowsFrom(loadedRows);
-		comparisonRows = filteredRowsFrom(comparisonLoadedRows);
-		uniqueMembers = new Set(rows.map((row) => row.memberId || row.memberEmail || row.conversationId)).size;
-		comparisonUniqueMembers = new Set(
-			comparisonRows.map((row) => row.memberId || row.memberEmail || row.conversationId)
+			const currentStart = effectiveStartDate() ?? '';
+			const currentEnd = effectiveEndDate() ?? '';
+			currentRangeLabel = currentStart && currentEnd ? `${currentStart} to ${currentEnd}` : '';
+			rows = filteredRowsFrom(loadedRows);
+			comparisonRows = filteredRowsFrom(comparisonLoadedRows);
+			const comparisonRange = resolvedComparisonRange();
+			comparisonRangeLabel =
+				comparisonEnabled && comparisonRange
+					? `${comparisonRange.startDate} to ${comparisonRange.endDate}`
+					: '';
+			uniqueMembers = new Set(rows.map((row) => row.memberId || row.memberEmail || row.conversationId)).size;
+			comparisonUniqueMembers = new Set(
+				comparisonRows.map((row) => row.memberId || row.memberEmail || row.conversationId)
 		).size;
 		activeCoaches = new Set(rows.map((row) => row.coachId || row.coachName || '').filter(Boolean)).size;
 		comparisonActiveCoaches = new Set(
@@ -788,16 +885,55 @@
 			comparisonActiveCoaches > 0 ? comparisonRows.length / comparisonActiveCoaches : 0;
 		barsProgram = countsByDimension(rows, 'program');
 		barsEmployer = countsByDimension(rows, 'employer');
-		barsChannel = countsByDimension(rows, 'channel');
-		barsServiceCode = countsByDimension(rows, 'serviceCode');
-		barsCoach = countsByDimension(rows, 'coach');
-		barsDirection = countsByDimension(rows, 'directionality');
-		lineProgram = dateSeriesByDimension(rows, 'program');
-		lineEmployer = dateSeriesByDimension(rows, 'employer');
-		lineChannel = dateSeriesByDimension(rows, 'channel');
-		lineServiceCode = dateSeriesByDimension(rows, 'serviceCode');
-		lineCoach = dateSeriesByDimension(rows, 'coach');
-			lineDirection = dateSeriesByDimension(rows, 'directionality');
+			barsChannel = countsByDimension(rows, 'channel');
+			barsServiceCode = countsByDimension(rows, 'serviceCode');
+			barsCoach = countsByDimension(rows, 'coach');
+			barsDirection = countsByDimension(rows, 'directionality');
+			comparisonBarsProgram = countsByDimension(comparisonRows, 'program');
+			comparisonBarsEmployer = countsByDimension(comparisonRows, 'employer');
+			comparisonBarsChannel = countsByDimension(comparisonRows, 'channel');
+			comparisonBarsServiceCode = countsByDimension(comparisonRows, 'serviceCode');
+			comparisonBarsCoach = countsByDimension(comparisonRows, 'coach');
+			comparisonBarsDirection = countsByDimension(comparisonRows, 'directionality');
+			lineProgram = dateSeriesByDimension(rows, 'program', { startDate: currentStart, endDate: currentEnd });
+			lineEmployer = dateSeriesByDimension(rows, 'employer', {
+				startDate: currentStart,
+				endDate: currentEnd
+			});
+			lineChannel = dateSeriesByDimension(rows, 'channel', { startDate: currentStart, endDate: currentEnd });
+			lineServiceCode = dateSeriesByDimension(rows, 'serviceCode', {
+				startDate: currentStart,
+				endDate: currentEnd
+			});
+			lineCoach = dateSeriesByDimension(rows, 'coach', { startDate: currentStart, endDate: currentEnd });
+			lineDirection = dateSeriesByDimension(rows, 'directionality', {
+				startDate: currentStart,
+				endDate: currentEnd
+			});
+			comparisonLineProgram =
+				comparisonEnabled && comparisonRange
+					? dateSeriesByDimension(comparisonRows, 'program', comparisonRange)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
+			comparisonLineEmployer =
+				comparisonEnabled && comparisonRange
+					? dateSeriesByDimension(comparisonRows, 'employer', comparisonRange)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
+			comparisonLineChannel =
+				comparisonEnabled && comparisonRange
+					? dateSeriesByDimension(comparisonRows, 'channel', comparisonRange)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
+			comparisonLineServiceCode =
+				comparisonEnabled && comparisonRange
+					? dateSeriesByDimension(comparisonRows, 'serviceCode', comparisonRange)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
+			comparisonLineCoach =
+				comparisonEnabled && comparisonRange
+					? dateSeriesByDimension(comparisonRows, 'coach', comparisonRange)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
+			comparisonLineDirection =
+				comparisonEnabled && comparisonRange
+					? dateSeriesByDimension(comparisonRows, 'directionality', comparisonRange)
+					: { dates: [], series: [], xAxisLabel: 'Date' };
 			table = tableRows(rows);
 			chipItems = buildFilterChips();
 			modalFilterLabels = chipItems.map((chip) => chip.label);
@@ -1034,25 +1170,379 @@
 		/>
 	</div>
 
-	{#if chartMode === 'bar'}
-		<div class="grid gap-4 xl:grid-cols-2">
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounters by Program</Card.Title></Card.Header><Card.Content><HorizontalBarChart items={barsProgram} xAxisLabel="Encounters" yAxisLabel="Program" expandedTitle="Encounters by Program" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounters by Employer</Card.Title></Card.Header><Card.Content><HorizontalBarChart items={barsEmployer} xAxisLabel="Encounters" yAxisLabel="Employer" expandedTitle="Encounters by Employer" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounters by Channel</Card.Title></Card.Header><Card.Content><HorizontalBarChart items={barsChannel} xAxisLabel="Encounters" yAxisLabel="Channel" expandedTitle="Encounters by Channel" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounters by Service Code</Card.Title></Card.Header><Card.Content><HorizontalBarChart items={barsServiceCode} xAxisLabel="Encounters" yAxisLabel="Service Code" expandedTitle="Encounters by Service Code" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounters by Coach</Card.Title></Card.Header><Card.Content><HorizontalBarChart items={barsCoach} xAxisLabel="Encounters" yAxisLabel="Coach" expandedTitle="Encounters by Coach" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounters by Directionality</Card.Title></Card.Header><Card.Content><HorizontalBarChart items={barsDirection} xAxisLabel="Encounters" yAxisLabel="Directionality" expandedTitle="Encounters by Directionality" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-		</div>
-	{:else}
-		<div class="grid gap-4 xl:grid-cols-2">
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounter Trend by Program</Card.Title></Card.Header><Card.Content><MultiSeriesLineChart dates={lineProgram.dates} series={lineProgram.series} yAxisLabel="Encounters" xAxisLabel={lineProgram.xAxisLabel} expandedTitle="Encounter Trend by Program" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounter Trend by Employer</Card.Title></Card.Header><Card.Content><MultiSeriesLineChart dates={lineEmployer.dates} series={lineEmployer.series} yAxisLabel="Encounters" xAxisLabel={lineEmployer.xAxisLabel} expandedTitle="Encounter Trend by Employer" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounter Trend by Channel</Card.Title></Card.Header><Card.Content><MultiSeriesLineChart dates={lineChannel.dates} series={lineChannel.series} yAxisLabel="Encounters" xAxisLabel={lineChannel.xAxisLabel} expandedTitle="Encounter Trend by Channel" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounter Trend by Service Code</Card.Title></Card.Header><Card.Content><MultiSeriesLineChart dates={lineServiceCode.dates} series={lineServiceCode.series} yAxisLabel="Encounters" xAxisLabel={lineServiceCode.xAxisLabel} expandedTitle="Encounter Trend by Service Code" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounter Trend by Coach</Card.Title></Card.Header><Card.Content><MultiSeriesLineChart dates={lineCoach.dates} series={lineCoach.series} yAxisLabel="Encounters" xAxisLabel={lineCoach.xAxisLabel} expandedTitle="Encounter Trend by Coach" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-			<Card.Root><Card.Header class="pb-2"><Card.Title class="text-base">Encounter Trend by Directionality</Card.Title></Card.Header><Card.Content><MultiSeriesLineChart dates={lineDirection.dates} series={lineDirection.series} yAxisLabel="Encounters" xAxisLabel={lineDirection.xAxisLabel} expandedTitle="Encounter Trend by Directionality" activeFilters={modalFilterLabels} /></Card.Content></Card.Root>
-		</div>
-	{/if}
+		{#if chartMode === 'bar'}
+			<div class="grid gap-4 xl:grid-cols-2">
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounters by Program</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.programBar ? 'default' : 'outline'}
+								class={chartComparison.programBar
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('programBar')}
+							>
+								{chartComparison.programBar ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<HorizontalBarChart
+							items={barsProgram}
+							comparisonItems={comparisonBarsProgram}
+							showComparison={chartComparison.programBar}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							xAxisLabel="Encounters"
+							yAxisLabel="Program"
+							expandedTitle="Encounters by Program"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounters by Employer</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.employerBar ? 'default' : 'outline'}
+								class={chartComparison.employerBar
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('employerBar')}
+							>
+								{chartComparison.employerBar ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<HorizontalBarChart
+							items={barsEmployer}
+							comparisonItems={comparisonBarsEmployer}
+							showComparison={chartComparison.employerBar}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							xAxisLabel="Encounters"
+							yAxisLabel="Employer"
+							expandedTitle="Encounters by Employer"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounters by Channel</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.channelBar ? 'default' : 'outline'}
+								class={chartComparison.channelBar
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('channelBar')}
+							>
+								{chartComparison.channelBar ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<HorizontalBarChart
+							items={barsChannel}
+							comparisonItems={comparisonBarsChannel}
+							showComparison={chartComparison.channelBar}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							xAxisLabel="Encounters"
+							yAxisLabel="Channel"
+							expandedTitle="Encounters by Channel"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounters by Service Code</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.serviceCodeBar ? 'default' : 'outline'}
+								class={chartComparison.serviceCodeBar
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('serviceCodeBar')}
+							>
+								{chartComparison.serviceCodeBar ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<HorizontalBarChart
+							items={barsServiceCode}
+							comparisonItems={comparisonBarsServiceCode}
+							showComparison={chartComparison.serviceCodeBar}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							xAxisLabel="Encounters"
+							yAxisLabel="Service Code"
+							expandedTitle="Encounters by Service Code"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounters by Coach</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.coachBar ? 'default' : 'outline'}
+								class={chartComparison.coachBar
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('coachBar')}
+							>
+								{chartComparison.coachBar ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<HorizontalBarChart
+							items={barsCoach}
+							comparisonItems={comparisonBarsCoach}
+							showComparison={chartComparison.coachBar}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							xAxisLabel="Encounters"
+							yAxisLabel="Coach"
+							expandedTitle="Encounters by Coach"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounters by Directionality</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.directionalityBar ? 'default' : 'outline'}
+								class={chartComparison.directionalityBar
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('directionalityBar')}
+							>
+								{chartComparison.directionalityBar ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<HorizontalBarChart
+							items={barsDirection}
+							comparisonItems={comparisonBarsDirection}
+							showComparison={chartComparison.directionalityBar}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							xAxisLabel="Encounters"
+							yAxisLabel="Directionality"
+							expandedTitle="Encounters by Directionality"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+			</div>
+		{:else}
+			<div class="grid gap-4 xl:grid-cols-2">
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounter Trend by Program</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.programLine ? 'default' : 'outline'}
+								class={chartComparison.programLine
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('programLine')}
+							>
+								{chartComparison.programLine ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<MultiSeriesLineChart
+							dates={lineProgram.dates}
+							series={lineProgram.series}
+							comparisonSeries={comparisonLineProgram.series}
+							showComparison={chartComparison.programLine}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							yAxisLabel="Encounters"
+							xAxisLabel={lineProgram.xAxisLabel}
+							expandedTitle="Encounter Trend by Program"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounter Trend by Employer</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.employerLine ? 'default' : 'outline'}
+								class={chartComparison.employerLine
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('employerLine')}
+							>
+								{chartComparison.employerLine ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<MultiSeriesLineChart
+							dates={lineEmployer.dates}
+							series={lineEmployer.series}
+							comparisonSeries={comparisonLineEmployer.series}
+							showComparison={chartComparison.employerLine}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							yAxisLabel="Encounters"
+							xAxisLabel={lineEmployer.xAxisLabel}
+							expandedTitle="Encounter Trend by Employer"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounter Trend by Channel</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.channelLine ? 'default' : 'outline'}
+								class={chartComparison.channelLine
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('channelLine')}
+							>
+								{chartComparison.channelLine ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<MultiSeriesLineChart
+							dates={lineChannel.dates}
+							series={lineChannel.series}
+							comparisonSeries={comparisonLineChannel.series}
+							showComparison={chartComparison.channelLine}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							yAxisLabel="Encounters"
+							xAxisLabel={lineChannel.xAxisLabel}
+							expandedTitle="Encounter Trend by Channel"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounter Trend by Service Code</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.serviceCodeLine ? 'default' : 'outline'}
+								class={chartComparison.serviceCodeLine
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('serviceCodeLine')}
+							>
+								{chartComparison.serviceCodeLine ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<MultiSeriesLineChart
+							dates={lineServiceCode.dates}
+							series={lineServiceCode.series}
+							comparisonSeries={comparisonLineServiceCode.series}
+							showComparison={chartComparison.serviceCodeLine}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							yAxisLabel="Encounters"
+							xAxisLabel={lineServiceCode.xAxisLabel}
+							expandedTitle="Encounter Trend by Service Code"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounter Trend by Coach</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.coachLine ? 'default' : 'outline'}
+								class={chartComparison.coachLine
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('coachLine')}
+							>
+								{chartComparison.coachLine ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<MultiSeriesLineChart
+							dates={lineCoach.dates}
+							series={lineCoach.series}
+							comparisonSeries={comparisonLineCoach.series}
+							showComparison={chartComparison.coachLine}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							yAxisLabel="Encounters"
+							xAxisLabel={lineCoach.xAxisLabel}
+							expandedTitle="Encounter Trend by Coach"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root>
+					<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2">
+						<Card.Title class="text-base">Encounter Trend by Directionality</Card.Title>
+						{#if comparisonDisplayEnabled}
+							<Button
+								size="sm"
+								variant={chartComparison.directionalityLine ? 'default' : 'outline'}
+								class={chartComparison.directionalityLine
+									? CHART_COMPARE_ACTIVE_CLASS
+									: CHART_COMPARE_INACTIVE_CLASS}
+								onclick={() => toggleChartComparison('directionalityLine')}
+							>
+								{chartComparison.directionalityLine ? 'Comparing' : 'Compare'}
+							</Button>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<MultiSeriesLineChart
+							dates={lineDirection.dates}
+							series={lineDirection.series}
+							comparisonSeries={comparisonLineDirection.series}
+							showComparison={chartComparison.directionalityLine}
+							currentRangeLabel={currentRangeLabel}
+							comparisonRangeLabel={comparisonRangeLabel}
+							yAxisLabel="Encounters"
+							xAxisLabel={lineDirection.xAxisLabel}
+							expandedTitle="Encounter Trend by Directionality"
+							activeFilters={modalFilterLabels}
+						/>
+					</Card.Content>
+				</Card.Root>
+			</div>
+		{/if}
 
 	<TablePanel
 		title="Coaching Encounter Detail"
