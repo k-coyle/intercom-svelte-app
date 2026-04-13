@@ -1,0 +1,352 @@
+<script lang="ts">
+	import { onDestroy, onMount } from 'svelte';
+	import LoadStatus from '$lib/components/report/LoadStatus.svelte';
+	import PieBreakdownChart from '$lib/components/report/PieBreakdownChart.svelte';
+	import HorizontalBarChart from '$lib/components/report/HorizontalBarChart.svelte';
+	import MultiSeriesLineChart from '$lib/components/report/MultiSeriesLineChart.svelte';
+	import MultiSelectDropdown from '$lib/components/report/MultiSelectDropdown.svelte';
+	import ActiveFilterChips from '$lib/components/report/ActiveFilterChips.svelte';
+	import KpiCard from '$lib/components/report/KpiCard.svelte';
+	import TablePanel from '$lib/components/report/TablePanel.svelte';
+	import * as Card from '$lib/components/ui/card';
+	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
+	import {
+		cleanupSdOutgoingReferralsJob,
+		fetchAllSdOutgoingReferralsRows,
+		fetchSdOutgoingReferralsView,
+		runSdOutgoingReferralsJobUntilComplete
+	} from '$lib/client/sd-referrals-outgoing-job';
+	import {
+		type ComparisonRangeMode,
+		exportRowsAsCsv,
+		isoDateDaysAgo,
+		previousPeriodRange,
+		todayIsoDate,
+		uniqueListValues,
+		uniqueSorted
+	} from '$lib/client/sd-report-utils';
+	import {
+		buildBreakdown,
+		buildEventDateSeries,
+		type LineSeriesResult
+	} from '$lib/client/sd-event-report-utils';
+	import type { TableColumn } from '$lib/components/report/engagementReportConfig';
+
+	type Row = {
+		conversationId: string;
+		createdAt: number;
+		createdDate: string;
+		memberId: string | null;
+		memberName: string | null;
+		memberEmail: string | null;
+		programs: string[];
+		employer: string | null;
+		outgoingReferral: string | null;
+		outgoingReferralReason: string | null;
+		coachId: string | null;
+		coachName: string | null;
+	};
+	type Summary = { generatedAt: string; startDate: string; endDate: string; totalRows: number; dateBounds: { minCreatedDate: string | null; maxCreatedDate: string | null } };
+	type FilterChip = { key: string; label: string; onRemove: () => void };
+	type CompareKey = 'destinationBreakdown' | 'reasonBreakdown' | 'destinationTrend' | 'reasonTrend';
+
+	export let data: { sandboxModeOffline?: boolean };
+
+	const TABLE_COLUMNS: TableColumn[] = [
+		{ key: 'member', header: 'Member' },
+		{ key: 'employer', header: 'Employer' },
+		{ key: 'programs', header: 'Programs' },
+		{ key: 'destination', header: 'Outgoing Referral' },
+		{ key: 'reason', header: 'Referral Reason' },
+		{ key: 'coach', header: 'Coach' },
+		{ key: 'createdDate', header: 'Created Date' }
+	];
+	const RUN_BUTTON_CLASS = 'bg-red-700 text-white hover:bg-red-600 border-red-700';
+	const EXPORT_BUTTON_CLASS = 'border-green-700 text-green-700 hover:bg-green-50';
+	const COMPARISON_ENABLED_BUTTON_CLASS = 'w-full bg-blue-900 text-white hover:bg-blue-800 border-blue-900';
+	const COMPARISON_DISABLED_BUTTON_CLASS = 'w-full border-blue-300 text-blue-900 hover:bg-blue-50';
+	const CHART_COMPARE_ACTIVE_CLASS = 'border-slate-900 bg-slate-900 text-white hover:bg-slate-800';
+	const CHART_COMPARE_INACTIVE_CLASS = 'border-slate-300 text-slate-700 hover:bg-slate-50';
+
+	let rangeStart = '';
+	let rangeEnd = '';
+	let sandboxDateMin = '';
+	let sandboxDateMax = '';
+	let comparisonEnabled = false;
+	let comparisonMode: ComparisonRangeMode = 'previous';
+	let comparisonStart = '';
+	let comparisonEnd = '';
+	let selectedPrograms: string[] = [];
+	let selectedEmployers: string[] = [];
+	let selectedDestinations: string[] = [];
+	let selectedReasons: string[] = [];
+	let selectedCoaches: string[] = [];
+	let chartComparison: Record<CompareKey, boolean> = { destinationBreakdown: false, reasonBreakdown: false, destinationTrend: false, reasonTrend: false };
+	let summary: Summary | null = null;
+	let loadedRows: Row[] = [];
+	let comparisonLoadedRows: Row[] = [];
+	let comparisonDisplayEnabled = false;
+	let comparisonSignature = '';
+	let loading = false;
+	let error: string | null = null;
+	let progressText: string | null = null;
+	let controller: AbortController | null = null;
+	const sessionJobIds = new Set<string>();
+	const jobIdByRangeKey = new Map<string, string>();
+	let programOptions: string[] = [];
+	let employerOptions: string[] = [];
+	let destinationOptions: string[] = [];
+	let reasonOptions: string[] = [];
+	let coachOptions: string[] = [];
+	let filteredRows: Row[] = [];
+	let comparisonRows: Row[] = [];
+	let chips: FilterChip[] = [];
+	let modalFilterLabels: string[] = [];
+	let table: Array<Record<string, string>> = [];
+	let currentRangeLabel = '';
+	let comparisonRangeLabel = '';
+	let destinationTrendData: LineSeriesResult = { dates: [], series: [], xAxisLabel: 'Date' };
+	let reasonTrendData: LineSeriesResult = { dates: [], series: [], xAxisLabel: 'Date' };
+	let comparisonDestinationTrendData: LineSeriesResult = { dates: [], series: [], xAxisLabel: 'Date' };
+	let comparisonReasonTrendData: LineSeriesResult = { dates: [], series: [], xAxisLabel: 'Date' };
+
+	function label(value: string | null | undefined): string { return String(value ?? '').trim() || 'Unspecified'; }
+	function resetChartComparisons() { chartComparison = { destinationBreakdown: false, reasonBreakdown: false, destinationTrend: false, reasonTrend: false }; }
+	function inRange(value: number | null, start: string, end: string): boolean { const s = Date.parse(`${start}T00:00:00Z`); const e = Date.parse(`${end}T00:00:00Z`); if (!Number.isFinite(s) || !Number.isFinite(e) || value == null) return false; const unix = Math.floor(s / 1000); const endUnix = Math.floor(e / 1000) + 86400; return value >= unix && value < endUnix; }
+	function currentRange() { return rangeStart && rangeEnd ? { startDate: rangeStart, endDate: rangeEnd } : null; }
+	function resolvedComparisonRange() { if (!comparisonEnabled) return null; return comparisonMode === 'previous' ? (currentRange() ? previousPeriodRange(rangeStart, rangeEnd) : null) : (comparisonStart && comparisonEnd ? { startDate: comparisonStart, endDate: comparisonEnd } : null); }
+	function rangeKey(startDate: string, endDate: string) { return `${startDate}|${endDate}`; }
+	function refreshFilterOptions() { programOptions = uniqueListValues(loadedRows); employerOptions = uniqueSorted(loadedRows.map((row) => label(row.employer))); destinationOptions = uniqueSorted(loadedRows.map((row) => label(row.outgoingReferral))); reasonOptions = uniqueSorted(loadedRows.map((row) => label(row.outgoingReferralReason))); coachOptions = uniqueSorted(loadedRows.map((row) => label(row.coachName))); selectedPrograms = selectedPrograms.filter((v) => programOptions.includes(v)); selectedEmployers = selectedEmployers.filter((v) => employerOptions.includes(v)); selectedDestinations = selectedDestinations.filter((v) => destinationOptions.includes(v)); selectedReasons = selectedReasons.filter((v) => reasonOptions.includes(v)); selectedCoaches = selectedCoaches.filter((v) => coachOptions.includes(v)); }
+	function passesFilters(row: Row) { const programsOk = selectedPrograms.length === 0 || selectedPrograms.some((value) => (row.programs ?? []).includes(value)); const employersOk = selectedEmployers.length === 0 || selectedEmployers.includes(label(row.employer)); const destinationsOk = selectedDestinations.length === 0 || selectedDestinations.includes(label(row.outgoingReferral)); const reasonsOk = selectedReasons.length === 0 || selectedReasons.includes(label(row.outgoingReferralReason)); const coachesOk = selectedCoaches.length === 0 || selectedCoaches.includes(label(row.coachName)); return programsOk && employersOk && destinationsOk && reasonsOk && coachesOk; }
+	function toggleComparison() { comparisonEnabled = !comparisonEnabled; if (comparisonEnabled && comparisonMode === 'previous' && rangeStart && rangeEnd) { const previous = previousPeriodRange(rangeStart, rangeEnd); comparisonStart = previous?.startDate ?? ''; comparisonEnd = previous?.endDate ?? ''; } }
+	function resetFilters() { comparisonEnabled = false; comparisonMode = 'previous'; comparisonStart = ''; comparisonEnd = ''; selectedPrograms = []; selectedEmployers = []; selectedDestinations = []; selectedReasons = []; selectedCoaches = []; resetChartComparisons(); }
+	function activeFilterChips(): FilterChip[] { const next: FilterChip[] = []; if (rangeStart || rangeEnd) next.push({ key: 'date', label: `Date: ${rangeStart || '...'} to ${rangeEnd || '...'}`, onRemove: () => { rangeStart = ''; rangeEnd = ''; } }); if (comparisonEnabled) next.push({ key: 'comparison', label: comparisonMode === 'previous' ? `Comparison: ${resolvedComparisonRange()?.startDate ?? '...'} to ${resolvedComparisonRange()?.endDate ?? '...'}` : `Comparison: ${comparisonStart || '...'} to ${comparisonEnd || '...'}`, onRemove: () => { comparisonEnabled = false; comparisonStart = ''; comparisonEnd = ''; } }); for (const value of selectedPrograms) next.push({ key: `program-${value}`, label: `Program: ${value}`, onRemove: () => selectedPrograms = selectedPrograms.filter((entry) => entry !== value) }); for (const value of selectedEmployers) next.push({ key: `employer-${value}`, label: `Employer: ${value}`, onRemove: () => selectedEmployers = selectedEmployers.filter((entry) => entry !== value) }); for (const value of selectedDestinations) next.push({ key: `destination-${value}`, label: `Outgoing Referral: ${value}`, onRemove: () => selectedDestinations = selectedDestinations.filter((entry) => entry !== value) }); for (const value of selectedReasons) next.push({ key: `reason-${value}`, label: `Referral Reason: ${value}`, onRemove: () => selectedReasons = selectedReasons.filter((entry) => entry !== value) }); for (const value of selectedCoaches) next.push({ key: `coach-${value}`, label: `Coach: ${value}`, onRemove: () => selectedCoaches = selectedCoaches.filter((entry) => entry !== value) }); return next; }
+	function exportCsv() { exportRowsAsCsv({ filenamePrefix: 'sd_outgoing_referrals', headers: ['Member', 'Employer', 'Programs', 'Outgoing Referral', 'Referral Reason', 'Coach', 'Created Date'], rows: table.map((row) => [row.member, row.employer, row.programs, row.destination, row.reason, row.coach, row.createdDate]) }); }
+
+	async function loadRange(startDate: string, endDate: string): Promise<{ jobId: string; summary: Summary; rows: Row[] }> {
+		const key = rangeKey(startDate, endDate);
+		const signal = controller?.signal;
+		const cachedJobId = jobIdByRangeKey.get(key);
+		if (cachedJobId) {
+			try {
+				return { jobId: cachedJobId, summary: await fetchSdOutgoingReferralsView<Summary>(cachedJobId, 'summary', undefined, undefined, signal, { retryLimit: 1 }), rows: await fetchAllSdOutgoingReferralsRows<Row>({ jobId: cachedJobId, signal, retry: { retryLimit: 1 } }) };
+			} catch (err: any) {
+				if (!String(err?.message ?? '').toLowerCase().includes('job not found')) throw err;
+				jobIdByRangeKey.delete(key);
+			}
+		}
+		const { jobId } = await runSdOutgoingReferralsJobUntilComplete({ startDate, endDate, signal, stepDelayMs: 150, onJobCreated: (id) => { sessionJobIds.add(id); jobIdByRangeKey.set(key, id); }, onProgress: (progress) => { progressText = `Loaded ${progress?.progress?.uniqueConversationSeeds ?? 0} outgoing referrals`; } });
+		return { jobId, summary: await fetchSdOutgoingReferralsView<Summary>(jobId, 'summary', undefined, undefined, signal, { retryLimit: 2 }), rows: await fetchAllSdOutgoingReferralsRows<Row>({ jobId, signal, retry: { retryLimit: 2 } }) };
+	}
+
+	async function runReport() {
+		if (!rangeStart || !rangeEnd) { error = 'Select a reporting start and end date.'; return; }
+		if (comparisonEnabled && !resolvedComparisonRange()) { error = 'Select a valid comparison date range.'; return; }
+		controller?.abort(); controller = new AbortController(); loading = true; error = null; progressText = 'Starting outgoing referrals report...'; comparisonDisplayEnabled = false; resetChartComparisons();
+		try {
+			const primary = await loadRange(rangeStart, rangeEnd); summary = primary.summary; loadedRows = primary.rows; refreshFilterOptions();
+			if (data?.sandboxModeOffline) { sandboxDateMin = primary.summary.dateBounds.minCreatedDate ?? primary.summary.startDate; sandboxDateMax = primary.summary.dateBounds.maxCreatedDate ?? primary.summary.endDate; }
+			const comparison = resolvedComparisonRange();
+			if (comparisonEnabled && comparison) { const comparisonResult = await loadRange(comparison.startDate, comparison.endDate); comparisonLoadedRows = comparisonResult.rows; comparisonDisplayEnabled = true; }
+			else { comparisonLoadedRows = []; }
+			progressText = null;
+		} catch (err: any) { if (err?.name !== 'AbortError') error = err?.message ?? 'Failed to load outgoing referrals.'; } finally { loading = false; }
+	}
+
+	$: {
+		const nextSignature = comparisonEnabled ? `${comparisonMode}|${comparisonStart}|${comparisonEnd}|${rangeStart}|${rangeEnd}` : 'disabled';
+		if (nextSignature !== comparisonSignature) { comparisonSignature = nextSignature; comparisonDisplayEnabled = false; resetChartComparisons(); if (comparisonEnabled && comparisonMode === 'previous' && rangeStart && rangeEnd) { const previous = previousPeriodRange(rangeStart, rangeEnd); comparisonStart = previous?.startDate ?? ''; comparisonEnd = previous?.endDate ?? ''; } }
+	}
+	$: {
+		loadedRows;
+		comparisonLoadedRows;
+		rangeStart;
+		rangeEnd;
+		comparisonEnabled;
+		comparisonMode;
+		comparisonStart;
+		comparisonEnd;
+		selectedPrograms;
+		selectedEmployers;
+		selectedDestinations;
+		selectedReasons;
+		selectedCoaches;
+
+		const range = currentRange(); const comparison = resolvedComparisonRange(); currentRangeLabel = range ? `${range.startDate} to ${range.endDate}` : ''; comparisonRangeLabel = comparisonEnabled && comparison ? `${comparison.startDate} to ${comparison.endDate}` : ''; filteredRows = range ? loadedRows.filter((row) => passesFilters(row) && inRange(row.createdAt, range.startDate, range.endDate)) : []; comparisonRows = comparison ? comparisonLoadedRows.filter((row) => passesFilters(row) && inRange(row.createdAt, comparison.startDate, comparison.endDate)) : []; chips = loadedRows.length > 0 ? activeFilterChips() : []; modalFilterLabels = chips.map((chip) => chip.label); table = filteredRows.map((row) => ({ member: row.memberName ?? row.memberEmail ?? row.memberId ?? row.conversationId, employer: label(row.employer), programs: row.programs?.join(', ') || '-', destination: label(row.outgoingReferral), reason: label(row.outgoingReferralReason), coach: label(row.coachName), createdDate: row.createdDate ?? '-' })); destinationTrendData = range ? buildEventDateSeries(filteredRows, (row) => row.createdAt, (row) => [label(row.outgoingReferral)], range) : { dates: [], series: [], xAxisLabel: 'Date' }; reasonTrendData = range ? buildEventDateSeries(filteredRows, (row) => row.createdAt, (row) => [label(row.outgoingReferralReason)], range) : { dates: [], series: [], xAxisLabel: 'Date' }; comparisonDestinationTrendData = comparison ? buildEventDateSeries(comparisonRows, (row) => row.createdAt, (row) => [label(row.outgoingReferral)], comparison) : { dates: [], series: [], xAxisLabel: 'Date' }; comparisonReasonTrendData = comparison ? buildEventDateSeries(comparisonRows, (row) => row.createdAt, (row) => [label(row.outgoingReferralReason)], comparison) : { dates: [], series: [], xAxisLabel: 'Date' };
+	}
+
+	onMount(() => { controller = new AbortController(); if (data?.sandboxModeOffline) { rangeStart = isoDateDaysAgo(30); rangeEnd = todayIsoDate(); void runReport(); } });
+	onDestroy(() => { controller?.abort(); for (const jobId of sessionJobIds) void cleanupSdOutgoingReferralsJob(jobId, true); sessionJobIds.clear(); jobIdByRangeKey.clear(); });
+</script>
+
+	<div class="space-y-4">
+		<Card.Root>
+			<Card.Header class="pb-3">
+				<Card.Title class="text-base">Outgoing Referral Filters</Card.Title>
+			</Card.Header>
+			<Card.Content class="space-y-4">
+				<div class="grid gap-3 md:grid-cols-4">
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="rangeStart">Reporting Start</label>
+						<Input
+							id="rangeStart"
+							type="date"
+							bind:value={rangeStart}
+							min={data?.sandboxModeOffline ? sandboxDateMin : undefined}
+							max={data?.sandboxModeOffline ? sandboxDateMax : undefined}
+						/>
+					</div>
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="rangeEnd">Reporting End</label>
+						<Input
+							id="rangeEnd"
+							type="date"
+							bind:value={rangeEnd}
+							min={data?.sandboxModeOffline ? sandboxDateMin : undefined}
+							max={data?.sandboxModeOffline ? sandboxDateMax : undefined}
+						/>
+					</div>
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="comparisonToggle">Comparison</label>
+						<Button
+							id="comparisonToggle"
+							type="button"
+							variant={comparisonEnabled ? 'default' : 'outline'}
+							class={comparisonEnabled
+								? COMPARISON_ENABLED_BUTTON_CLASS
+								: COMPARISON_DISABLED_BUTTON_CLASS}
+							onclick={toggleComparison}
+							disabled={loading}
+						>
+							{comparisonEnabled ? 'Disable Comparison' : 'Enable Comparison'}
+						</Button>
+					</div>
+				</div>
+
+				{#if comparisonEnabled}
+					<div class="grid gap-3 md:grid-cols-4">
+						<div class="space-y-1">
+							<label class="text-xs font-medium text-muted-foreground" for="comparisonMode">Comparison Type</label>
+							<select
+								id="comparisonMode"
+								class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+								bind:value={comparisonMode}
+								disabled={loading}
+							>
+								<option value="previous">Previous Period</option>
+								<option value="custom">Custom Range</option>
+							</select>
+						</div>
+						<div class="space-y-1">
+							<label class="text-xs font-medium text-muted-foreground" for="comparisonStart">Comparison Start</label>
+							<Input id="comparisonStart" type="date" bind:value={comparisonStart} disabled={loading} />
+						</div>
+						<div class="space-y-1">
+							<label class="text-xs font-medium text-muted-foreground" for="comparisonEnd">Comparison End</label>
+							<Input id="comparisonEnd" type="date" bind:value={comparisonEnd} disabled={loading} />
+						</div>
+					</div>
+				{/if}
+	
+				{#if loadedRows.length === 0}
+					<p class="text-sm text-muted-foreground">
+						{summary
+							? 'No rows were returned for this range, so there are no additional filters to apply.'
+							: 'Run the report to load available Program, Employer, Outgoing Referral, Referral Reason, and Coach filter values.'}
+					</p>
+				{:else}
+					<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Program</p>
+							<MultiSelectDropdown
+								placeholder="All programs"
+								options={programOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedPrograms}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Employer</p>
+							<MultiSelectDropdown
+								placeholder="All employers"
+								options={employerOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedEmployers}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Outgoing Referral</p>
+							<MultiSelectDropdown
+								placeholder="All destinations"
+								options={destinationOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedDestinations}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Referral Reason</p>
+							<MultiSelectDropdown
+								placeholder="All reasons"
+								options={reasonOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedReasons}
+								disabled={loading}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium text-muted-foreground">Coach</p>
+							<MultiSelectDropdown
+								placeholder="All coaches"
+								options={coachOptions.map((value) => ({ value, label: value }))}
+								bind:selected={selectedCoaches}
+								disabled={loading}
+							/>
+						</div>
+					</div>
+					<ActiveFilterChips chips={chips} />
+				{/if}
+	
+				<div class="flex flex-wrap items-center gap-2">
+					<Button variant="destructive" class={RUN_BUTTON_CLASS} onclick={runReport} disabled={loading}>
+						{loading ? 'Loading...' : 'Run'}
+					</Button>
+					<Button variant="outline" onclick={resetFilters} disabled={loading}>Reset Filters</Button>
+					<Button
+						variant="outline"
+						class={EXPORT_BUTTON_CLASS}
+						onclick={exportCsv}
+						disabled={table.length === 0 || loading}
+					>
+						Export CSV
+					</Button>
+				</div>
+				<LoadStatus {loading} {error} {progressText} />
+			</Card.Content>
+		</Card.Root>
+
+	<div class="grid gap-4 md:grid-cols-2">
+		<KpiCard title="Total Outgoing Referrals" value={filteredRows.length} comparisonEnabled={comparisonDisplayEnabled} comparisonValue={comparisonDisplayEnabled ? comparisonRows.length : null} comparisonTrend="higher_is_better" />
+		<KpiCard title="Unique Members Referred Out" value={new Set(filteredRows.map((row) => row.memberId ?? row.conversationId)).size} comparisonEnabled={comparisonDisplayEnabled} comparisonValue={comparisonDisplayEnabled ? new Set(comparisonRows.map((row) => row.memberId ?? row.conversationId)).size : null} comparisonTrend="higher_is_better" />
+	</div>
+
+	<div class="grid gap-4 xl:grid-cols-2">
+		<Card.Root>
+			<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2"><Card.Title class="text-base">Outgoing Referrals by Destination</Card.Title>{#if comparisonDisplayEnabled}<Button size="sm" variant={chartComparison.destinationBreakdown ? 'default' : 'outline'} class={chartComparison.destinationBreakdown ? CHART_COMPARE_ACTIVE_CLASS : CHART_COMPARE_INACTIVE_CLASS} onclick={() => chartComparison = { ...chartComparison, destinationBreakdown: !chartComparison.destinationBreakdown }}>{chartComparison.destinationBreakdown ? 'Comparing' : 'Compare'}</Button>{/if}</Card.Header>
+			<Card.Content>{#if chartComparison.destinationBreakdown}<HorizontalBarChart items={buildBreakdown(filteredRows, (row) => [label(row.outgoingReferral)])} comparisonItems={buildBreakdown(comparisonRows, (row) => [label(row.outgoingReferral)])} showComparison={true} currentRangeLabel={currentRangeLabel} comparisonRangeLabel={comparisonRangeLabel} xAxisLabel="Referrals" yAxisLabel="Outgoing Referral" expandedTitle="Outgoing Referrals by Destination" activeFilters={modalFilterLabels} />{:else}<PieBreakdownChart items={buildBreakdown(filteredRows, (row) => [label(row.outgoingReferral)])} expandedTitle="Outgoing Referrals by Destination" activeFilters={modalFilterLabels} />{/if}</Card.Content>
+		</Card.Root>
+		<Card.Root>
+			<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2"><Card.Title class="text-base">Outgoing Referrals by Reason</Card.Title>{#if comparisonDisplayEnabled}<Button size="sm" variant={chartComparison.reasonBreakdown ? 'default' : 'outline'} class={chartComparison.reasonBreakdown ? CHART_COMPARE_ACTIVE_CLASS : CHART_COMPARE_INACTIVE_CLASS} onclick={() => chartComparison = { ...chartComparison, reasonBreakdown: !chartComparison.reasonBreakdown }}>{chartComparison.reasonBreakdown ? 'Comparing' : 'Compare'}</Button>{/if}</Card.Header>
+			<Card.Content>{#if chartComparison.reasonBreakdown}<HorizontalBarChart items={buildBreakdown(filteredRows, (row) => [label(row.outgoingReferralReason)])} comparisonItems={buildBreakdown(comparisonRows, (row) => [label(row.outgoingReferralReason)])} showComparison={true} currentRangeLabel={currentRangeLabel} comparisonRangeLabel={comparisonRangeLabel} xAxisLabel="Referrals" yAxisLabel="Referral Reason" expandedTitle="Outgoing Referrals by Reason" activeFilters={modalFilterLabels} />{:else}<PieBreakdownChart items={buildBreakdown(filteredRows, (row) => [label(row.outgoingReferralReason)])} expandedTitle="Outgoing Referrals by Reason" activeFilters={modalFilterLabels} />{/if}</Card.Content>
+		</Card.Root>
+		<Card.Root>
+			<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2"><Card.Title class="text-base">Outgoing Referral Trend by Destination</Card.Title>{#if comparisonDisplayEnabled}<Button size="sm" variant={chartComparison.destinationTrend ? 'default' : 'outline'} class={chartComparison.destinationTrend ? CHART_COMPARE_ACTIVE_CLASS : CHART_COMPARE_INACTIVE_CLASS} onclick={() => chartComparison = { ...chartComparison, destinationTrend: !chartComparison.destinationTrend }}>{chartComparison.destinationTrend ? 'Comparing' : 'Compare'}</Button>{/if}</Card.Header>
+			<Card.Content><MultiSeriesLineChart dates={destinationTrendData.dates} series={destinationTrendData.series} comparisonSeries={comparisonDestinationTrendData.series} showComparison={chartComparison.destinationTrend} currentRangeLabel={currentRangeLabel} comparisonRangeLabel={comparisonRangeLabel} yAxisLabel="Referrals" xAxisLabel="Date" expandedTitle="Outgoing Referral Trend by Destination" activeFilters={modalFilterLabels} /></Card.Content>
+		</Card.Root>
+		<Card.Root>
+			<Card.Header class="flex flex-row items-center justify-between gap-2 pb-2"><Card.Title class="text-base">Outgoing Referral Trend by Reason</Card.Title>{#if comparisonDisplayEnabled}<Button size="sm" variant={chartComparison.reasonTrend ? 'default' : 'outline'} class={chartComparison.reasonTrend ? CHART_COMPARE_ACTIVE_CLASS : CHART_COMPARE_INACTIVE_CLASS} onclick={() => chartComparison = { ...chartComparison, reasonTrend: !chartComparison.reasonTrend }}>{chartComparison.reasonTrend ? 'Comparing' : 'Compare'}</Button>{/if}</Card.Header>
+			<Card.Content><MultiSeriesLineChart dates={reasonTrendData.dates} series={reasonTrendData.series} comparisonSeries={comparisonReasonTrendData.series} showComparison={chartComparison.reasonTrend} currentRangeLabel={currentRangeLabel} comparisonRangeLabel={comparisonRangeLabel} yAxisLabel="Referrals" xAxisLabel="Date" expandedTitle="Outgoing Referral Trend by Reason" activeFilters={modalFilterLabels} /></Card.Content>
+		</Card.Root>
+	</div>
+
+	<TablePanel title="Outgoing Referral Detail" columns={TABLE_COLUMNS} rows={table} footerText={summary ? `Generated at ${new Date(summary.generatedAt).toLocaleString()}` : 'No rows available.'} pageSize={20} />
+</div>

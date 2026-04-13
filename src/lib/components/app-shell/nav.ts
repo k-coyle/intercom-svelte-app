@@ -25,5 +25,7 @@ export const engagementNav: NavItem[] = [
 export const sdNav: NavItem[] = [
 	{ label: 'Enrollments', href: '/sd/enrollments', icon: BarChart3Icon },
 	{ label: 'Coaching Activity', href: '/sd/coaching-activity', icon: MessagesSquareIcon },
-	{ label: 'Scheduling', href: '/sd/scheduling', icon: CalendarRangeIcon }
+	{ label: 'Scheduling', href: '/sd/scheduling', icon: CalendarRangeIcon },
+	{ label: 'Incoming Referrals', href: '/sd/referrals/incoming', icon: UserPlusIcon },
+	{ label: 'Outgoing Referrals', href: '/sd/referrals/outgoing', icon: ReceiptIcon }
 ];

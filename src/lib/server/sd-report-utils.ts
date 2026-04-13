@@ -2,6 +2,12 @@ import {
 	INTERCOM_ATTR_ELIGIBLE_PROGRAMS,
 	INTERCOM_ATTR_EMPLOYER,
 	INTERCOM_ATTR_ENROLLED_DATE,
+	INTERCOM_ATTR_OUTGOING_REFERRAL,
+	INTERCOM_ATTR_OUTGOING_REFERRAL_REASON,
+	INTERCOM_ATTR_REFERRAL,
+	INTERCOM_ATTR_REFERRAL_DATE,
+	INTERCOM_ATTR_REFERRAL_REASON,
+	INTERCOM_ATTR_REFERRAL_SOURCE,
 	INTERCOM_ATTR_REGISTRATION_DATE
 } from '$lib/server/intercom-attrs';
 
@@ -11,6 +17,14 @@ export const SD_EMPLOYER_ATTR_KEY = INTERCOM_ATTR_EMPLOYER;
 export const SD_PROGRAM_ATTR_KEY = INTERCOM_ATTR_ELIGIBLE_PROGRAMS;
 export const SD_ENROLLED_DATE_ATTR_KEY = INTERCOM_ATTR_ENROLLED_DATE;
 export const SD_REGISTRATION_DATE_ATTR_KEY = INTERCOM_ATTR_REGISTRATION_DATE;
+export const SD_REFERRAL_SOURCE_ATTR_KEYS = [
+	INTERCOM_ATTR_REFERRAL_SOURCE,
+	INTERCOM_ATTR_REFERRAL
+] as const;
+export const SD_REFERRAL_DATE_ATTR_KEY = INTERCOM_ATTR_REFERRAL_DATE;
+export const SD_REFERRAL_REASON_ATTR_KEY = INTERCOM_ATTR_REFERRAL_REASON;
+export const SD_OUTGOING_REFERRAL_ATTR_KEY = INTERCOM_ATTR_OUTGOING_REFERRAL;
+export const SD_OUTGOING_REFERRAL_REASON_ATTR_KEY = INTERCOM_ATTR_OUTGOING_REFERRAL_REASON;
 
 export function normalizeText(value: unknown): string {
 	return String(value ?? '')
@@ -68,6 +82,14 @@ export function toUnixOrNull(raw: unknown): number | null {
 		if (!Number.isNaN(parsedMs)) return Math.floor(parsedMs / 1000);
 	}
 
+	return null;
+}
+
+export function firstPresentString(rawValues: unknown[]): string | null {
+	for (const raw of rawValues) {
+		const text = String(raw ?? '').trim();
+		if (text) return text;
+	}
 	return null;
 }
 

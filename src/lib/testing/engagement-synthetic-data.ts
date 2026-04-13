@@ -3,6 +3,12 @@ import {
 	INTERCOM_ATTR_ELIGIBLE_PROGRAMS,
 	INTERCOM_ATTR_EMPLOYER,
 	INTERCOM_ATTR_ENROLLED_DATE,
+	INTERCOM_ATTR_OUTGOING_REFERRAL,
+	INTERCOM_ATTR_OUTGOING_REFERRAL_REASON,
+	INTERCOM_ATTR_REFERRAL,
+	INTERCOM_ATTR_REFERRAL_DATE,
+	INTERCOM_ATTR_REFERRAL_REASON,
+	INTERCOM_ATTR_REFERRAL_SOURCE,
 	INTERCOM_ATTR_REGISTRATION_DATE,
 	INTERCOM_ATTR_SERVICE_CODE
 } from '$lib/server/intercom-attrs';
@@ -145,6 +151,38 @@ const SERVICE_CODE_CATEGORIES = [
 	'General Inquiry'
 ];
 
+const INCOMING_REFERRAL_SOURCES = [
+	'Primary Care Provider',
+	'Care Manager',
+	'Employer Benefits Team',
+	'Health Plan',
+	'Hospital Discharge'
+];
+
+const INCOMING_REFERRAL_REASONS = [
+	'Weight management support',
+	'Tobacco cessation counseling',
+	'Cardiometabolic risk follow-up',
+	'Mental health coaching',
+	'Medication adherence'
+];
+
+const OUTGOING_REFERRAL_DESTINATIONS = [
+	'Behavioral Health',
+	'Primary Care',
+	'Physical Therapy',
+	'Nutrition Services',
+	'Specialist Care'
+];
+
+const OUTGOING_REFERRAL_REASONS = [
+	'Escalated symptoms',
+	'Diagnostic follow-up',
+	'Medication review',
+	'Care coordination',
+	'Specialist recommendation'
+];
+
 const FIRST_NAMES = [
 	'Avery',
 	'Blake',
@@ -247,6 +285,9 @@ function buildContact(args: {
 	registrationUnix: number;
 	enrolledUnix: number;
 	eligiblePrograms: string[];
+	referralSource?: string | null;
+	referralReason?: string | null;
+	referralDateUnix?: number | null;
 }): ContactLike {
 	return {
 		id: args.id,
@@ -257,7 +298,15 @@ function buildContact(args: {
 			[INTERCOM_ATTR_EMPLOYER]: args.employer,
 			[INTERCOM_ATTR_ELIGIBLE_PROGRAMS]: args.eligiblePrograms,
 			[INTERCOM_ATTR_REGISTRATION_DATE]: args.registrationUnix,
-			[INTERCOM_ATTR_ENROLLED_DATE]: args.enrolledUnix
+			[INTERCOM_ATTR_ENROLLED_DATE]: args.enrolledUnix,
+			...(args.referralSource
+				? {
+						[INTERCOM_ATTR_REFERRAL_SOURCE]: args.referralSource,
+						[INTERCOM_ATTR_REFERRAL]: args.referralSource
+					}
+				: {}),
+			...(args.referralReason ? { [INTERCOM_ATTR_REFERRAL_REASON]: args.referralReason } : {}),
+			...(args.referralDateUnix ? { [INTERCOM_ATTR_REFERRAL_DATE]: args.referralDateUnix } : {})
 		}
 	};
 }
@@ -270,6 +319,8 @@ function buildConversation(args: {
 	serviceCode: string;
 	createdAtUnix: number;
 	adminId: string | null;
+	outgoingReferral?: string | null;
+	outgoingReferralReason?: string | null;
 }): ConversationLike {
 	const created = args.createdAtUnix;
 	return {
@@ -280,7 +331,11 @@ function buildConversation(args: {
 		admin_assignee_id: args.adminId,
 		custom_attributes: {
 			[INTERCOM_ATTR_CHANNEL]: args.channel,
-			[INTERCOM_ATTR_SERVICE_CODE]: args.serviceCode
+			[INTERCOM_ATTR_SERVICE_CODE]: args.serviceCode,
+			...(args.outgoingReferral ? { [INTERCOM_ATTR_OUTGOING_REFERRAL]: args.outgoingReferral } : {}),
+			...(args.outgoingReferralReason
+				? { [INTERCOM_ATTR_OUTGOING_REFERRAL_REASON]: args.outgoingReferralReason }
+				: {})
 		},
 		contacts: { contacts: [{ id: args.memberId }] },
 		statistics: {
@@ -726,42 +781,53 @@ export function buildSyntheticEngagementData(opts: SyntheticDataOptions = {}): S
 		const profile = pickProfile(index);
 		let enrolledUnix: number;
 		let registrationUnix: number;
+		const referralSource =
+			index % 2 === 0 ? INCOMING_REFERRAL_SOURCES[index % INCOMING_REFERRAL_SOURCES.length] : null;
+		const referralReason =
+			index % 2 === 0 ? INCOMING_REFERRAL_REASONS[index % INCOMING_REFERRAL_REASONS.length] : null;
 
-		if (index <= currentMonthCohortSize) {
+			if (index <= currentMonthCohortSize) {
 			const enrollmentOffsetWindow = Math.max(
 				1,
 				latestCurrentMonthUnix - currentMonthWindow.monthStartUnix - 4 * 60 * 60
 			);
 			const enrollmentOffset = ((index * 6 * 60 * 60) % enrollmentOffsetWindow) + 3 * 60 * 60;
 			enrolledUnix = currentMonthWindow.monthStartUnix + enrollmentOffset;
-			registrationUnix = Math.max(
-				currentMonthWindow.monthStartUnix + 60 * 60,
-				enrolledUnix - (2 + (index % 4)) * 60 * 60
-			);
-		} else {
-			const enrolledDaysAgo = getEnrollmentDaysAgo(index, profile);
-			const registrationDaysAgo = enrolledDaysAgo + 1 + (index % 3);
-			enrolledUnix = daysAgo(anchorUnix, enrolledDaysAgo);
-			registrationUnix = daysAgo(anchorUnix, registrationDaysAgo);
-		}
+				registrationUnix = Math.max(
+					currentMonthWindow.monthStartUnix + 60 * 60,
+					enrolledUnix - (2 + (index % 4)) * 60 * 60
+				);
+			} else {
+				const enrolledDaysAgo = getEnrollmentDaysAgo(index, profile);
+				const registrationDaysAgo = enrolledDaysAgo + 1 + (index % 3);
+				enrolledUnix = daysAgo(anchorUnix, enrolledDaysAgo);
+				registrationUnix = daysAgo(anchorUnix, registrationDaysAgo);
+			}
+			const referralDateUnix =
+				referralSource != null
+					? Math.max(registrationUnix - (2 + (index % 21)) * SECONDS_PER_DAY, 1)
+					: null;
 
-		contacts.push(
-			buildContact({
-				id: memberId,
-				name: `${firstName} ${lastName}`,
-				email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}.${index}@example.test`,
-				employer,
-				registrationUnix,
-				enrolledUnix,
-				eligiblePrograms:
-					index % 4 === 0
-						? [
-								PROGRAM_CATEGORIES[index % PROGRAM_CATEGORIES.length],
-								PROGRAM_CATEGORIES[(index + 2) % PROGRAM_CATEGORIES.length]
-							]
-						: [PROGRAM_CATEGORIES[index % PROGRAM_CATEGORIES.length]]
-			})
-		);
+			contacts.push(
+				buildContact({
+					id: memberId,
+					name: `${firstName} ${lastName}`,
+					email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}.${index}@example.test`,
+					employer,
+					registrationUnix,
+					enrolledUnix,
+					referralSource,
+					referralReason,
+					referralDateUnix,
+					eligiblePrograms:
+						index % 4 === 0
+							? [
+									PROGRAM_CATEGORIES[index % PROGRAM_CATEGORIES.length],
+									PROGRAM_CATEGORIES[(index + 2) % PROGRAM_CATEGORIES.length]
+								]
+							: [PROGRAM_CATEGORIES[index % PROGRAM_CATEGORIES.length]]
+				})
+			);
 
 		const lastSessionDaysAgo = getLastSessionDaysAgo(index, profile);
 		if (lastSessionDaysAgo != null) {
@@ -778,23 +844,33 @@ export function buildSyntheticEngagementData(opts: SyntheticDataOptions = {}): S
 				sessionDaysAgoList.push(75 + (index % 60));
 			}
 
-			for (let j = 0; j < sessionDaysAgoList.length; j += 1) {
-				const days = sessionDaysAgoList[j];
-				const channel = STANDARD_REPORT_SESSION_CHANNELS[(index + j) % STANDARD_REPORT_SESSION_CHANNELS.length];
-				const isCallChannel = channel === 'Phone' || channel === 'Video Conference';
-				const serviceCode =
-					isCallChannel && (index + j) % 2 === 0
-						? SERVICE_CODE_CATEGORIES[(index + j) % 2]
-						: SERVICE_CODE_CATEGORIES[(index + j + 2) % SERVICE_CODE_CATEGORIES.length];
+				for (let j = 0; j < sessionDaysAgoList.length; j += 1) {
+					const days = sessionDaysAgoList[j];
+					const channel = STANDARD_REPORT_SESSION_CHANNELS[(index + j) % STANDARD_REPORT_SESSION_CHANNELS.length];
+					const isCallChannel = channel === 'Phone' || channel === 'Video Conference';
+					const serviceCode =
+						isCallChannel && (index + j) % 2 === 0
+							? SERVICE_CODE_CATEGORIES[(index + j) % 2]
+							: SERVICE_CODE_CATEGORIES[(index + j + 2) % SERVICE_CODE_CATEGORIES.length];
+					const outgoingReferral =
+						(index + j) % 3 === 0
+							? OUTGOING_REFERRAL_DESTINATIONS[(index + j) % OUTGOING_REFERRAL_DESTINATIONS.length]
+							: null;
+					const outgoingReferralReason =
+						outgoingReferral != null
+							? OUTGOING_REFERRAL_REASONS[(index + j) % OUTGOING_REFERRAL_REASONS.length]
+							: null;
 
-				const conversation = buildConversation({
-					id: `c${String(conversationCounter).padStart(6, '0')}`,
-					memberId,
-					channel,
-					serviceCode,
-					createdAtUnix: daysAgo(anchorUnix, days),
-					adminId: admins[(index + j) % admins.length].id
-				});
+					const conversation = buildConversation({
+						id: `c${String(conversationCounter).padStart(6, '0')}`,
+						memberId,
+						channel,
+						serviceCode,
+						createdAtUnix: daysAgo(anchorUnix, days),
+						adminId: admins[(index + j) % admins.length].id,
+						outgoingReferral,
+						outgoingReferralReason
+					});
 				conversations.push(conversation);
 
 				// Intentional duplicate IDs to keep de-duplication test coverage active.
