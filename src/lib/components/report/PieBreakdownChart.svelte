@@ -38,13 +38,17 @@
 	let expandedOpen = false;
 	let selectedLabels: string[] = [];
 	let labelsSignature = '';
+	let expandedSelectionCustomized = false;
 
 	function openExpanded() {
 		if (!expandable || selectableLabels.length === 0) return;
+		expandedSelectionCustomized = false;
+		selectedLabels = selectableLabels;
 		expandedOpen = true;
 	}
 
 	function setLabelSelected(label: string, selected: boolean): void {
+		expandedSelectionCustomized = true;
 		if (selected) {
 			selectedLabels = selectableLabels.filter(
 				(entry) => entry === label || selectedLabels.includes(entry)
@@ -58,10 +62,12 @@
 	}
 
 	function selectTopCategories(): void {
+		expandedSelectionCustomized = true;
 		selectedLabels = defaultInlineLabels;
 	}
 
 	function selectAllCategories(): void {
+		expandedSelectionCustomized = false;
 		selectedLabels = selectableLabels;
 	}
 
@@ -145,12 +151,17 @@
 	$: hasHiddenItems = selectableLabels.length > defaultInlineLabels.length;
 	$: nextLabelsSignature = selectableLabels.join('\u0000');
 	$: if (nextLabelsSignature !== labelsSignature) {
-		const available = new Set(selectableLabels);
-		const retained = selectedLabels.filter((label) => available.has(label));
-		selectedLabels =
-			retained.length > 0
-				? selectableLabels.filter((label) => retained.includes(label))
-				: defaultInlineLabels;
+		if (expandedSelectionCustomized) {
+			const available = new Set(selectableLabels);
+			const retained = selectedLabels.filter((label) => available.has(label));
+			selectedLabels =
+				retained.length > 0
+					? selectableLabels.filter((label) => retained.includes(label))
+					: selectableLabels;
+			expandedSelectionCustomized = retained.length > 0;
+		} else {
+			selectedLabels = selectableLabels;
+		}
 		labelsSignature = nextLabelsSignature;
 	}
 	$: totalValue = sortedItems.reduce((sum, item) => sum + item.value, 0);
@@ -171,6 +182,9 @@
 	$: visibleExpandedSlices = visibleExpandedEntries.map((item) =>
 		buildSlice(item.label, item.value, expandedTotalValue)
 	);
+	$: hasUnselectedExpandedItems = visibleExpandedSlices.length < selectableLabels.length;
+	$: showExpandedCategorySelector =
+		hasHiddenItems || hasUnselectedExpandedItems || expandedSelectionCustomized;
 	$: inlineGradient = gradientForSlices(visibleInlineSlices, totalValue);
 	$: expandedGradient = gradientForSlices(visibleExpandedSlices, expandedTotalValue);
 	$: inlinePositionedSlices = positionSlices(
@@ -274,26 +288,30 @@
 					<div class="rounded-md border bg-muted/20 p-3">
 						<div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
 							<span>Showing {visibleExpandedSlices.length} of {selectableLabels.length} categories.</span>
-							{#if hasHiddenItems}
+							{#if showExpandedCategorySelector}
 								<div class="flex items-center gap-2">
-									<button
-										type="button"
-										class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
-										onclick={selectTopCategories}
-									>
-										Top {defaultVisibleCount}
-									</button>
-									<button
-										type="button"
-										class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
-										onclick={selectAllCategories}
-									>
-										All Categories
-									</button>
+									{#if hasHiddenItems}
+										<button
+											type="button"
+											class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
+											onclick={selectTopCategories}
+										>
+											Top {defaultVisibleCount}
+										</button>
+									{/if}
+									{#if hasUnselectedExpandedItems || expandedSelectionCustomized}
+										<button
+											type="button"
+											class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
+											onclick={selectAllCategories}
+										>
+											All Categories
+										</button>
+									{/if}
 								</div>
 							{/if}
 						</div>
-						{#if hasHiddenItems}
+						{#if showExpandedCategorySelector}
 							<div class="mt-3 grid max-h-40 gap-2 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
 								{#each selectableLabels as label}
 									<label class="flex items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs">

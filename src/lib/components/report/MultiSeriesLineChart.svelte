@@ -65,6 +65,7 @@
 	let expandedOpen = false;
 	let selectedSeriesNames: string[] = [];
 	let seriesSignature = '';
+	let expandedSelectionCustomized = false;
 
 	function normalizedValue(value: unknown): number | null {
 		if (value == null) return null;
@@ -146,6 +147,7 @@
 	}
 
 	function setSeriesSelected(name: string, selected: boolean): void {
+		expandedSelectionCustomized = true;
 		if (selected) {
 			selectedSeriesNames = selectableSeriesNames.filter(
 				(entryName) => entryName === name || selectedSeriesNames.includes(entryName)
@@ -159,15 +161,19 @@
 	}
 
 	function selectTopCategories(): void {
+		expandedSelectionCustomized = true;
 		selectedSeriesNames = defaultInlineSeriesNames;
 	}
 
 	function selectAllCategories(): void {
+		expandedSelectionCustomized = false;
 		selectedSeriesNames = selectableSeriesNames;
 	}
 
 	function openExpanded() {
 		if (!expandable) return;
+		expandedSelectionCustomized = false;
+		selectedSeriesNames = selectableSeriesNames;
 		expandedOpen = true;
 	}
 
@@ -219,12 +225,17 @@
 	$: hasHiddenSeries = selectableSeriesNames.length > defaultInlineSeriesNames.length;
 	$: nextSeriesSignature = selectableSeriesNames.join('\u0000');
 	$: if (nextSeriesSignature !== seriesSignature) {
-		const available = new Set(selectableSeriesNames);
-		const retained = selectedSeriesNames.filter((name) => available.has(name));
-		selectedSeriesNames =
-			retained.length > 0
-				? selectableSeriesNames.filter((name) => retained.includes(name))
-				: defaultInlineSeriesNames;
+		if (expandedSelectionCustomized) {
+			const available = new Set(selectableSeriesNames);
+			const retained = selectedSeriesNames.filter((name) => available.has(name));
+			selectedSeriesNames =
+				retained.length > 0
+					? selectableSeriesNames.filter((name) => retained.includes(name))
+					: selectableSeriesNames;
+			expandedSelectionCustomized = retained.length > 0;
+		} else {
+			selectedSeriesNames = selectableSeriesNames;
+		}
 		seriesSignature = nextSeriesSignature;
 	}
 	$: selectedSeriesSet = new Set(selectedSeriesNames);
@@ -246,6 +257,9 @@
 				.map((name) => comparisonSeriesMap.get(name))
 				.filter((entry): entry is RankedSeries => Boolean(entry))
 		: [];
+	$: hasUnselectedExpandedSeries = visibleExpandedCurrentSeries.length < selectableSeriesNames.length;
+	$: showExpandedCategorySelector =
+		hasHiddenSeries || hasUnselectedExpandedSeries || expandedSelectionCustomized;
 	$: inlineMaxValue = Math.max(
 		maxDefinedValues(visibleInlineCurrentSeries),
 		maxDefinedValues(visibleInlineComparisonSeries)
@@ -474,26 +488,30 @@
 					<div class="rounded-md border bg-muted/20 p-3">
 						<div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
 							<span>Showing {visibleExpandedCurrentSeries.length} of {selectableSeriesNames.length} categories.</span>
-							{#if hasHiddenSeries}
+							{#if showExpandedCategorySelector}
 								<div class="flex items-center gap-2">
-									<button
-										type="button"
-										class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
-										onclick={selectTopCategories}
-									>
-										Top {defaultVisibleCount}
-									</button>
-									<button
-										type="button"
-										class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
-										onclick={selectAllCategories}
-									>
-										All Categories
-									</button>
+									{#if hasHiddenSeries}
+										<button
+											type="button"
+											class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
+											onclick={selectTopCategories}
+										>
+											Top {defaultVisibleCount}
+										</button>
+									{/if}
+									{#if hasUnselectedExpandedSeries || expandedSelectionCustomized}
+										<button
+											type="button"
+											class="rounded-md border bg-background px-2 py-1 text-foreground hover:bg-accent"
+											onclick={selectAllCategories}
+										>
+											All Categories
+										</button>
+									{/if}
 								</div>
 							{/if}
 						</div>
-						{#if hasHiddenSeries}
+						{#if showExpandedCategorySelector}
 							<div class="mt-3 grid max-h-40 gap-2 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
 								{#each selectableSeriesNames as name}
 									<label class="flex items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs">
