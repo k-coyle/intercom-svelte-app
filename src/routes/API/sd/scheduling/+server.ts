@@ -1,6 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { ONCEHUB_API_KEY, ONCEHUB_API_BASE } from '$env/static/private';
-import { intercomRequest } from '$lib/server/intercom-provider';
+import { INTERCOM_MAX_PER_PAGE, intercomRequest } from '$lib/server/intercom-provider';
+import { INTERCOM_ATTR_NAME } from '$lib/server/intercom-attrs';
 import {
 	isAbortError,
 	JOB_TTL_MS,
@@ -34,10 +35,26 @@ const ONCEHUB_BASE_PATH_SEGMENT = new URL(ONCEHUB_BASE_URL_WITH_SLASH).pathname.
 const ONCEHUB_PAGE_LIMIT = 100;
 const ONCEHUB_MAX_PAGES = 80;
 const CONTACT_LOOKUP_BATCH = 12;
+const CONTACTS_PER_PAGE = INTERCOM_MAX_PER_PAGE;
 const INSTANCE_ID = getInstanceFingerprint();
+const NAME_NOISE_TOKENS = new Set([
+	'mr',
+	'mrs',
+	'ms',
+	'miss',
+	'mx',
+	'dr',
+	'jr',
+	'sr',
+	'ii',
+	'iii',
+	'iv',
+	'v'
+]);
 
 type JobStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
-type JobPhase = 'bookings' | 'contacts' | 'admins' | 'finalize' | 'complete';
+type JobPhase = 'bookings' | 'contacts' | 'name-contacts' | 'admins' | 'finalize' | 'complete';
+type MemberMatchMethod = 'email' | 'name_strict' | 'name_relaxed' | 'none';
 
 type RawBookingSeed = {
 	id: string;
@@ -48,6 +65,9 @@ type RawBookingSeed = {
 	startingUnix: number | null;
 	attendees: string[];
 	owner: string | null;
+	memberNameRaw: string | null;
+	memberNameStrictKey: string | null;
+	memberNameRelaxedKey: string | null;
 };
 
 type DateBasis = 'session' | 'created';
@@ -64,8 +84,12 @@ type SchedulingRow = {
 	statusRaw: string;
 	status: SchedulingStatus;
 	memberEmail: string | null;
+	oncehubMemberEmail: string | null;
+	intercomMemberEmail: string | null;
 	memberId: string | null;
 	memberName: string | null;
+	oncehubMemberName: string | null;
+	memberMatchMethod: MemberMatchMethod;
 	employer: string | null;
 	programs: string[];
 	coachEmail: string | null;
@@ -122,6 +146,14 @@ type SchedulingJobState = {
 	memberEmails: string[];
 	memberEmailIndex: number;
 	contactsByMemberEmail: Map<string, any>;
+	nameFallbackPrepared: boolean;
+	nameFallbackStartingAfter: string | null;
+	unresolvedMemberNameStrictKeys: Set<string>;
+	unresolvedMemberNameRelaxedKeys: Set<string>;
+	contactsByMemberNameStrictKey: Map<string, any>;
+	contactsByMemberNameRelaxedKey: Map<string, any>;
+	ambiguousMemberNameStrictKeys: Set<string>;
+	ambiguousMemberNameRelaxedKeys: Set<string>;
 	adminByEmail: Map<string, { id: string; name: string | null; email: string | null }>;
 	report?: SchedulingReport;
 };
@@ -167,6 +199,135 @@ function lower(value: unknown): string {
 	return String(value ?? '')
 		.trim()
 		.toLowerCase();
+}
+
+function cleanText(value: unknown): string {
+	return String(value ?? '').trim();
+}
+
+function looksLikeEmail(value: string): boolean {
+	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function firstNonEmptyString(values: unknown[]): string | null {
+	for (const value of values) {
+		const text = cleanText(value);
+		if (text) return text;
+	}
+	return null;
+}
+
+function joinNameParts(first: unknown, last: unknown): string | null {
+	return firstNonEmptyString([[cleanText(first), cleanText(last)].filter(Boolean).join(' ')]);
+}
+
+function extractAttendeeInfo(raw: unknown): { email: string | null; name: string | null } {
+	const direct = cleanText(raw);
+	if (direct) {
+		if (looksLikeEmail(direct)) return { email: direct, name: null };
+		if (typeof raw === 'string') return { email: null, name: direct };
+	}
+
+	if (!raw || typeof raw !== 'object') return { email: null, name: null };
+
+	const value = raw as Record<string, unknown>;
+	const email = firstNonEmptyString([
+		value.email,
+		value.email_address,
+		value.emailAddress,
+		value.value
+	]);
+	const name = firstNonEmptyString([
+		value.name,
+		value.full_name,
+		value.fullName,
+		joinNameParts(value.first_name ?? value.firstName, value.last_name ?? value.lastName)
+	]);
+
+	return {
+		email: email && looksLikeEmail(email) ? email : null,
+		name: name && !looksLikeEmail(name) ? name : null
+	};
+}
+
+function extractOncehubMemberName(raw: any, attendeeInfos: Array<{ email: string | null; name: string | null }>): string | null {
+	const attendeeName =
+		attendeeInfos.find((attendee) => attendee.email && !lower(attendee.email).endsWith('@uspm.com'))?.name ??
+		attendeeInfos.find((attendee) => attendee.name)?.name ??
+		null;
+
+	return firstNonEmptyString([
+		attendeeName,
+		raw?.contact?.name,
+		raw?.contact?.full_name,
+		raw?.contact?.fullName,
+		joinNameParts(raw?.contact?.first_name ?? raw?.contact?.firstName, raw?.contact?.last_name ?? raw?.contact?.lastName),
+		raw?.member?.name,
+		raw?.member?.full_name,
+		raw?.member?.fullName,
+		joinNameParts(raw?.member?.first_name ?? raw?.member?.firstName, raw?.member?.last_name ?? raw?.member?.lastName),
+		raw?.invitee?.name,
+		raw?.invitee?.full_name,
+		raw?.invitee?.fullName,
+		joinNameParts(raw?.invitee?.first_name ?? raw?.invitee?.firstName, raw?.invitee?.last_name ?? raw?.invitee?.lastName),
+		raw?.customer?.name,
+		raw?.customer?.full_name,
+		raw?.customer?.fullName,
+		joinNameParts(raw?.customer?.first_name ?? raw?.customer?.firstName, raw?.customer?.last_name ?? raw?.customer?.lastName),
+		raw?.contact_name,
+		raw?.contactName,
+		raw?.name,
+		raw?.full_name,
+		raw?.fullName
+	]);
+}
+
+function buildNormalizedNameKeys(raw: unknown): { strict: string | null; relaxed: string | null } {
+	const text = cleanText(raw);
+	if (!text || looksLikeEmail(text)) return { strict: null, relaxed: null };
+
+	const normalized = text
+		.normalize('NFKD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase()
+		.replace(/['’`]/g, '')
+		.replace(/-/g, ' ')
+		.replace(/,/g, ' ')
+		.replace(/[^a-z0-9\s]/g, ' ');
+
+	const tokens = normalized
+		.split(/\s+/)
+		.filter(Boolean)
+		.filter((token) => !NAME_NOISE_TOKENS.has(token))
+		.filter((token) => !/^[a-z]$/.test(token));
+
+	if (tokens.length < 2) return { strict: null, relaxed: null };
+
+	const strict = tokens.join(' ');
+	const relaxed = `${tokens[0]} ${tokens[tokens.length - 1]}`;
+	return {
+		strict,
+		relaxed
+	};
+}
+
+function extractIntercomContactName(contact: any): string | null {
+	const attrs = contact?.custom_attributes ?? {};
+	return firstNonEmptyString([contact?.name, attrs?.[INTERCOM_ATTR_NAME]]);
+}
+
+function extractIntercomContactEmail(contact: any): string | null {
+	const direct = cleanText(contact?.email);
+	if (direct && looksLikeEmail(direct)) return direct;
+
+	if (Array.isArray(contact?.emails)) {
+		for (const entry of contact.emails) {
+			const candidate = cleanText(entry?.value ?? entry?.email);
+			if (candidate && looksLikeEmail(candidate)) return candidate;
+		}
+	}
+
+	return null;
 }
 
 function normalizeStatus(
@@ -337,6 +498,127 @@ async function fetchContactByEmail(email: string, deadlineMs: number): Promise<a
 	}
 }
 
+async function fetchNameFallbackContactsPage(
+	job: SchedulingJobState,
+	deadlineMs: number
+): Promise<{ contacts: any[]; nextCursor: string | null }> {
+	const body: any = {
+		query: {
+			operator: 'AND',
+			value: [
+				{ field: 'role', operator: '=', value: 'user' },
+				{
+					field: `custom_attributes.${SD_EMPLOYER_ATTR_KEY}`,
+					operator: 'NIN',
+					value: [...SD_EXCLUDED_EMPLOYERS]
+				}
+			]
+		},
+		pagination: { per_page: CONTACTS_PER_PAGE }
+	};
+
+	if (job.nameFallbackStartingAfter) {
+		body.pagination.starting_after = job.nameFallbackStartingAfter;
+	}
+
+	const data = await intercomRequestWithDeadline(
+		'/contacts/search',
+		{
+			method: 'POST',
+			body: JSON.stringify(body)
+		},
+		deadlineMs
+	);
+
+	return {
+		contacts: data.data ?? data.contacts ?? [],
+		nextCursor: data.pages?.next?.starting_after ?? null
+	};
+}
+
+function captureUniqueContactMatch(
+	map: Map<string, any>,
+	ambiguous: Set<string>,
+	key: string | null,
+	contact: any
+) {
+	if (!key || ambiguous.has(key)) return;
+
+	const existing = map.get(key);
+	if (!existing) {
+		map.set(key, contact);
+		return;
+	}
+
+	if (String(existing?.id ?? '') !== String(contact?.id ?? '')) {
+		map.delete(key);
+		ambiguous.add(key);
+	}
+}
+
+function prepareNameFallbackLookups(job: SchedulingJobState) {
+	job.nameFallbackPrepared = true;
+	job.nameFallbackStartingAfter = null;
+	job.unresolvedMemberNameStrictKeys.clear();
+	job.unresolvedMemberNameRelaxedKeys.clear();
+	job.contactsByMemberNameStrictKey.clear();
+	job.contactsByMemberNameRelaxedKey.clear();
+	job.ambiguousMemberNameStrictKeys.clear();
+	job.ambiguousMemberNameRelaxedKeys.clear();
+
+	for (const booking of job.rawBookings) {
+		const memberEmail = pickMemberEmail(booking.attendees);
+		if (memberEmail && job.contactsByMemberEmail.has(lower(memberEmail))) continue;
+
+		if (booking.memberNameStrictKey) {
+			job.unresolvedMemberNameStrictKeys.add(booking.memberNameStrictKey);
+		}
+		if (booking.memberNameRelaxedKey) {
+			job.unresolvedMemberNameRelaxedKeys.add(booking.memberNameRelaxedKey);
+		}
+	}
+}
+
+function hasPendingNameFallbackLookups(job: SchedulingJobState): boolean {
+	for (const key of job.unresolvedMemberNameStrictKeys) {
+		if (!job.contactsByMemberNameStrictKey.has(key) && !job.ambiguousMemberNameStrictKeys.has(key)) {
+			return true;
+		}
+	}
+
+	for (const key of job.unresolvedMemberNameRelaxedKeys) {
+		if (!job.contactsByMemberNameRelaxedKey.has(key) && !job.ambiguousMemberNameRelaxedKeys.has(key)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+function processNameFallbackContactsPage(job: SchedulingJobState, contacts: any[]) {
+	for (const contact of contacts) {
+		const keys = buildNormalizedNameKeys(extractIntercomContactName(contact));
+
+		if (keys.strict && job.unresolvedMemberNameStrictKeys.has(keys.strict)) {
+			captureUniqueContactMatch(
+				job.contactsByMemberNameStrictKey,
+				job.ambiguousMemberNameStrictKeys,
+				keys.strict,
+				contact
+			);
+		}
+
+		if (keys.relaxed && job.unresolvedMemberNameRelaxedKeys.has(keys.relaxed)) {
+			captureUniqueContactMatch(
+				job.contactsByMemberNameRelaxedKey,
+				job.ambiguousMemberNameRelaxedKeys,
+				keys.relaxed,
+				contact
+			);
+		}
+	}
+}
+
 async function fetchAdminsByEmail(deadlineMs: number) {
 	const data = await intercomRequestWithDeadline('/admins', { method: 'GET' }, deadlineMs);
 	const admins = data.admins ?? data.data ?? [];
@@ -356,12 +638,17 @@ async function fetchAdminsByEmail(deadlineMs: number) {
 function toRawBookingSeed(raw: any): RawBookingSeed | null {
 	const id = raw?.id != null ? String(raw.id) : '';
 	if (!id) return null;
-	const attendees = Array.isArray(raw?.attendees)
-		? raw.attendees.map((value: unknown) => String(value ?? '').trim()).filter((value: string) => value.length > 0)
+	const attendeeInfos = Array.isArray(raw?.attendees)
+		? raw.attendees.map((value: unknown) => extractAttendeeInfo(value))
 		: [];
+	const attendees = attendeeInfos
+		.map((attendee: { email: string | null; name: string | null }) => attendee.email)
+		.filter((value: string | null): value is string => Boolean(value));
 	const createdTimeRaw = raw?.created_time ?? raw?.created_at ?? raw?.creation_time ?? raw?.createdAt ?? null;
 	const createdTime = createdTimeRaw != null ? String(createdTimeRaw) : null;
 	const startingTime = raw?.starting_time != null ? String(raw.starting_time) : null;
+	const memberNameRaw = extractOncehubMemberName(raw, attendeeInfos);
+	const memberNameKeys = buildNormalizedNameKeys(memberNameRaw);
 	return {
 		id,
 		statusRaw: raw?.status != null ? String(raw.status) : 'scheduled',
@@ -370,7 +657,10 @@ function toRawBookingSeed(raw: any): RawBookingSeed | null {
 		startingTime,
 		startingUnix: toUnixOrNull(startingTime),
 		attendees,
-		owner: raw?.owner != null ? String(raw.owner) : null
+		owner: raw?.owner != null ? String(raw.owner) : null,
+		memberNameRaw,
+		memberNameStrictKey: memberNameKeys.strict,
+		memberNameRelaxedKey: memberNameKeys.relaxed
 	};
 }
 
@@ -394,11 +684,41 @@ function buildStatusPayload(job: SchedulingJobState) {
 			memberEmails: job.memberEmails.length,
 			memberEmailIndex: job.memberEmailIndex,
 			contactsLoaded: job.contactsByMemberEmail.size,
+			nameFallbackPrepared: job.nameFallbackPrepared,
+			nameStrictKeysPending: job.unresolvedMemberNameStrictKeys.size,
+			nameRelaxedKeysPending: job.unresolvedMemberNameRelaxedKeys.size,
+			nameStrictMatches: job.contactsByMemberNameStrictKey.size,
+			nameRelaxedMatches: job.contactsByMemberNameRelaxedKey.size,
+			nameStrictAmbiguous: job.ambiguousMemberNameStrictKeys.size,
+			nameRelaxedAmbiguous: job.ambiguousMemberNameRelaxedKeys.size,
 			adminsLoaded: job.adminByEmail.size
 		},
 		error: job.error ?? null,
 		updatedAt: new Date(job.updatedAtMs).toISOString()
 	};
+}
+
+function resolveMemberContact(
+	job: SchedulingJobState,
+	booking: RawBookingSeed
+): { contact: any | null; method: MemberMatchMethod } {
+	const memberEmail = pickMemberEmail(booking.attendees);
+	if (memberEmail) {
+		const byEmail = job.contactsByMemberEmail.get(lower(memberEmail));
+		if (byEmail) return { contact: byEmail, method: 'email' };
+	}
+
+	if (booking.memberNameStrictKey) {
+		const byStrictName = job.contactsByMemberNameStrictKey.get(booking.memberNameStrictKey);
+		if (byStrictName) return { contact: byStrictName, method: 'name_strict' };
+	}
+
+	if (booking.memberNameRelaxedKey) {
+		const byRelaxedName = job.contactsByMemberNameRelaxedKey.get(booking.memberNameRelaxedKey);
+		if (byRelaxedName) return { contact: byRelaxedName, method: 'name_relaxed' };
+	}
+
+	return { contact: null, method: 'none' };
 }
 
 function finalize(job: SchedulingJobState) {
@@ -415,7 +735,8 @@ function finalize(job: SchedulingJobState) {
 
 		const coachEmail = pickCoachEmail(booking.attendees);
 		const memberEmail = pickMemberEmail(booking.attendees);
-		const contact = memberEmail ? job.contactsByMemberEmail.get(lower(memberEmail)) : null;
+		const memberContact = resolveMemberContact(job, booking);
+		const contact = memberContact.contact;
 		const attrs = contact?.custom_attributes ?? {};
 
 		const employerRaw = attrs?.[SD_EMPLOYER_ATTR_KEY];
@@ -429,6 +750,8 @@ function finalize(job: SchedulingJobState) {
 
 		const programs = parseStringListField(attrs?.[SD_PROGRAM_ATTR_KEY]);
 		const status = normalizeStatus(booking.statusRaw, booking.startingUnix, nowUnix);
+		const intercomMemberName = extractIntercomContactName(contact);
+		const intercomMemberEmail = extractIntercomContactEmail(contact);
 
 		const admin = coachEmail ? job.adminByEmail.get(lower(coachEmail)) : null;
 		allRows.push({
@@ -441,9 +764,13 @@ function finalize(job: SchedulingJobState) {
 			startingDate: toIsoDateLabel(booking.startingUnix),
 			statusRaw: booking.statusRaw,
 			status,
-			memberEmail: memberEmail ?? null,
+			memberEmail: intercomMemberEmail ?? memberEmail ?? null,
+			oncehubMemberEmail: memberEmail ?? null,
+			intercomMemberEmail,
 			memberId: contact?.id != null ? String(contact.id) : null,
-			memberName: contact?.name != null ? String(contact.name) : null,
+			memberName: intercomMemberName ?? booking.memberNameRaw,
+			oncehubMemberName: booking.memberNameRaw,
+			memberMatchMethod: memberContact.method,
 			employer,
 			programs,
 			coachEmail: coachEmail ?? null,
@@ -596,15 +923,18 @@ async function stepJob(job: SchedulingJobState) {
 			}
 		}
 
-		if (job.phase === 'contacts') {
-			while (timeLeftMs(deadlineMs) >= MIN_TIME_TO_START_REQUEST_MS && job.phase === 'contacts') {
-				if (job.memberEmailIndex >= job.memberEmails.length) {
-					job.phase = 'admins';
-					break;
-				}
+			if (job.phase === 'contacts') {
+				while (timeLeftMs(deadlineMs) >= MIN_TIME_TO_START_REQUEST_MS && job.phase === 'contacts') {
+					if (job.memberEmailIndex >= job.memberEmails.length) {
+						if (!job.nameFallbackPrepared) {
+							prepareNameFallbackLookups(job);
+						}
+						job.phase = hasPendingNameFallbackLookups(job) ? 'name-contacts' : 'admins';
+						break;
+					}
 
-				const batch = job.memberEmails.slice(
-					job.memberEmailIndex,
+					const batch = job.memberEmails.slice(
+						job.memberEmailIndex,
 					job.memberEmailIndex + CONTACT_LOOKUP_BATCH
 				);
 				const contacts = await Promise.all(
@@ -615,14 +945,27 @@ async function stepJob(job: SchedulingJobState) {
 					const contact = contacts[i];
 					if (contact) job.contactsByMemberEmail.set(lower(email), contact);
 				}
-				job.memberEmailIndex += batch.length;
+					job.memberEmailIndex += batch.length;
+				}
 			}
-		}
 
-		if (job.phase === 'admins' && timeLeftMs(deadlineMs) >= MIN_TIME_TO_START_REQUEST_MS) {
-			job.adminByEmail = await fetchAdminsByEmail(deadlineMs);
-			job.phase = 'finalize';
-		}
+			if (job.phase === 'name-contacts') {
+				while (timeLeftMs(deadlineMs) >= MIN_TIME_TO_START_REQUEST_MS && job.phase === 'name-contacts') {
+					const { contacts, nextCursor } = await fetchNameFallbackContactsPage(job, deadlineMs);
+					processNameFallbackContactsPage(job, contacts);
+					job.nameFallbackStartingAfter = nextCursor;
+
+					if (!hasPendingNameFallbackLookups(job) || !nextCursor || contacts.length === 0) {
+						job.phase = 'admins';
+						break;
+					}
+				}
+			}
+
+			if (job.phase === 'admins' && timeLeftMs(deadlineMs) >= MIN_TIME_TO_START_REQUEST_MS) {
+				job.adminByEmail = await fetchAdminsByEmail(deadlineMs);
+				job.phase = 'finalize';
+			}
 
 		if (job.phase === 'finalize') {
 			finalize(job);
@@ -680,6 +1023,14 @@ function createJob(
 		memberEmails: [],
 		memberEmailIndex: 0,
 		contactsByMemberEmail: new Map(),
+		nameFallbackPrepared: false,
+		nameFallbackStartingAfter: null,
+		unresolvedMemberNameStrictKeys: new Set(),
+		unresolvedMemberNameRelaxedKeys: new Set(),
+		contactsByMemberNameStrictKey: new Map(),
+		contactsByMemberNameRelaxedKey: new Map(),
+		ambiguousMemberNameStrictKeys: new Set(),
+		ambiguousMemberNameRelaxedKeys: new Set(),
 		adminByEmail: new Map()
 	};
 	jobs.set(job.id, job);
