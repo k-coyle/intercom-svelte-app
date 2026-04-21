@@ -17,13 +17,20 @@
 		runSdCoachingActivityJobUntilComplete
 	} from '$lib/client/sd-coaching-activity-job';
 	import {
+		SD_BLANK_FILTER_LABELS,
+		SD_FILTER_DEFAULT_OPTIONS,
+		SD_SERVICE_CODE_ALIASES,
 		type ComparisonRangeMode,
 		exportRowsAsCsv,
 		isoDateDaysAgo,
+		matchesSelectedFilter,
+		matchesSelectedListFilter,
+		mergeFilterOptions,
+		normalizeFilterValue,
 		previousPeriodRange,
+		retainSelectedFilterValues,
 		todayIsoDate,
-		uniqueListValues,
-		uniqueSorted
+		valuesOrBlank
 	} from '$lib/client/sd-report-utils';
 	import type { TableColumn } from '$lib/components/report/engagementReportConfig';
 
@@ -96,7 +103,6 @@
 		{ key: 'coach', header: 'Coach' },
 		{ key: 'directionality', header: 'Directionality' }
 	];
-	const DIRECTIONALITY_OPTIONS = ['Unidirectional', 'Bidirectional', 'Other'];
 	const RUN_BUTTON_CLASS = 'bg-red-700 text-white hover:bg-red-600 border-red-700';
 	const EXPORT_BUTTON_CLASS = 'border-green-700 text-green-700 hover:bg-green-50';
 	const COMPARISON_ENABLED_BUTTON_CLASS = 'w-full bg-blue-900 text-white hover:bg-blue-800 border-blue-900';
@@ -161,7 +167,7 @@
 	let serviceCodeOptions: string[] = [];
 	let coachOptions: string[] = [];
 	let channelOptions: string[] = [];
-	let directionalityOptions: string[] = [...DIRECTIONALITY_OPTIONS];
+	let directionalityOptions: string[] = [...SD_FILTER_DEFAULT_OPTIONS.directionality];
 
 	function toUnixStart(isoDate: string): number | null {
 		const ms = Date.parse(`${isoDate}T00:00:00Z`);
@@ -242,39 +248,64 @@
 		return 'Day';
 	}
 
+	function programLabels(row: CoachingRow): string[] {
+		return valuesOrBlank(row.programs).map((value) =>
+			normalizeFilterValue(value, { blankLabel: SD_BLANK_FILTER_LABELS.program })
+		);
+	}
+
+	function employerLabel(row: CoachingRow): string {
+		return normalizeFilterValue(row.employer, { blankLabel: SD_BLANK_FILTER_LABELS.employer });
+	}
+
+	function serviceCodeLabel(row: CoachingRow): string {
+		return normalizeFilterValue(row.serviceCode, {
+			blankLabel: SD_BLANK_FILTER_LABELS.serviceCode,
+			aliases: SD_SERVICE_CODE_ALIASES
+		});
+	}
+
+	function coachLabel(row: CoachingRow): string {
+		return normalizeFilterValue(row.coachName, { blankLabel: SD_BLANK_FILTER_LABELS.coach });
+	}
+
+	function channelLabel(row: CoachingRow): string {
+		return normalizeFilterValue(row.channel, { blankLabel: SD_BLANK_FILTER_LABELS.channel });
+	}
+
 	function includesPrograms(row: CoachingRow): boolean {
-		if (selectedPrograms.length === 0) return true;
-		const rowPrograms = new Set((row.programs ?? []).map((value) => value.trim()));
-		return selectedPrograms.some((value) => rowPrograms.has(value));
+		return matchesSelectedListFilter(selectedPrograms, row.programs, {
+			blankLabel: SD_BLANK_FILTER_LABELS.program
+		});
 	}
 
 	function includesEmployers(row: CoachingRow): boolean {
-		if (selectedEmployers.length === 0) return true;
-		if (!row.employer) return false;
-		return selectedEmployers.includes(row.employer);
+		return matchesSelectedFilter(selectedEmployers, row.employer, {
+			blankLabel: SD_BLANK_FILTER_LABELS.employer
+		});
 	}
 
 	function includesServiceCodes(row: CoachingRow): boolean {
-		if (selectedServiceCodes.length === 0) return true;
-		if (!row.serviceCode) return false;
-		return selectedServiceCodes.includes(row.serviceCode);
+		return matchesSelectedFilter(selectedServiceCodes, row.serviceCode, {
+			blankLabel: SD_BLANK_FILTER_LABELS.serviceCode,
+			aliases: SD_SERVICE_CODE_ALIASES
+		});
 	}
 
 	function includesCoaches(row: CoachingRow): boolean {
-		if (selectedCoaches.length === 0) return true;
-		if (!row.coachName) return false;
-		return selectedCoaches.includes(row.coachName);
+		return matchesSelectedFilter(selectedCoaches, row.coachName, {
+			blankLabel: SD_BLANK_FILTER_LABELS.coach
+		});
 	}
 
 	function includesChannels(row: CoachingRow): boolean {
-		if (selectedChannels.length === 0) return true;
-		if (!row.channel) return false;
-		return selectedChannels.includes(row.channel);
+		return matchesSelectedFilter(selectedChannels, row.channel, {
+			blankLabel: SD_BLANK_FILTER_LABELS.channel
+		});
 	}
 
 	function includesDirectionality(row: CoachingRow): boolean {
-		if (selectedDirectionality.length === 0) return true;
-		return selectedDirectionality.includes(row.directionality);
+		return matchesSelectedFilter(selectedDirectionality, row.directionality);
 	}
 
 	function filteredRowsFrom(sourceRows: CoachingRow[]): CoachingRow[] {
@@ -290,11 +321,11 @@
 	}
 
 	function valueKeys(row: CoachingRow, dimension: DimensionKey): string[] {
-		if (dimension === 'program') return row.programs?.length ? row.programs : ['Unspecified'];
-		if (dimension === 'employer') return [row.employer?.trim() || 'Unspecified'];
-		if (dimension === 'channel') return [row.channel?.trim() || 'Unspecified'];
-		if (dimension === 'serviceCode') return [row.serviceCode?.trim() || 'Unspecified'];
-		if (dimension === 'coach') return [row.coachName?.trim() || 'Unassigned'];
+		if (dimension === 'program') return programLabels(row);
+		if (dimension === 'employer') return [employerLabel(row)];
+		if (dimension === 'channel') return [channelLabel(row)];
+		if (dimension === 'serviceCode') return [serviceCodeLabel(row)];
+		if (dimension === 'coach') return [coachLabel(row)];
 		return [row.directionality || 'Other'];
 	}
 
@@ -369,19 +400,45 @@
 	}
 
 	function refreshFilterOptions() {
-		programOptions = uniqueListValues(loadedRows);
-		employerOptions = uniqueSorted(loadedRows.map((row) => row.employer));
-		serviceCodeOptions = uniqueSorted(loadedRows.map((row) => row.serviceCode));
-		coachOptions = uniqueSorted(loadedRows.map((row) => row.coachName));
-		channelOptions = uniqueSorted(loadedRows.map((row) => row.channel));
-		directionalityOptions = [...DIRECTIONALITY_OPTIONS];
+		programOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.programs,
+			loadedRows.flatMap((row) => valuesOrBlank(row.programs)),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.program }
+		);
+		employerOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.employers,
+			loadedRows.map((row) => row.employer),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.employer }
+		);
+		serviceCodeOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.serviceCodes,
+			loadedRows.map((row) => row.serviceCode),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.serviceCode, aliases: SD_SERVICE_CODE_ALIASES }
+		);
+		coachOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.coaches,
+			loadedRows.map((row) => row.coachName),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.coach }
+		);
+		channelOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.channels,
+			loadedRows.map((row) => row.channel),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.channel }
+		);
+		directionalityOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.directionality,
+			loadedRows.map((row) => row.directionality)
+		);
 
-		selectedPrograms = selectedPrograms.filter((value) => programOptions.includes(value));
-		selectedEmployers = selectedEmployers.filter((value) => employerOptions.includes(value));
-		selectedServiceCodes = selectedServiceCodes.filter((value) => serviceCodeOptions.includes(value));
-		selectedCoaches = selectedCoaches.filter((value) => coachOptions.includes(value));
-		selectedChannels = selectedChannels.filter((value) => channelOptions.includes(value));
-		selectedDirectionality = selectedDirectionality.filter((value) => directionalityOptions.includes(value));
+		selectedPrograms = retainSelectedFilterValues(selectedPrograms, programOptions);
+		selectedEmployers = retainSelectedFilterValues(selectedEmployers, employerOptions);
+		selectedServiceCodes = retainSelectedFilterValues(selectedServiceCodes, serviceCodeOptions);
+		selectedCoaches = retainSelectedFilterValues(selectedCoaches, coachOptions);
+		selectedChannels = retainSelectedFilterValues(selectedChannels, channelOptions);
+		selectedDirectionality = retainSelectedFilterValues(
+			selectedDirectionality,
+			directionalityOptions
+		);
 	}
 
 	function resetFilters() {
@@ -531,11 +588,11 @@
 		return rows.map((row) => ({
 			date: row.createdDate ?? '-',
 			member: row.memberName ?? row.memberEmail ?? row.memberId ?? '-',
-			employer: row.employer ?? '-',
-			programs: row.programs?.join(', ') || '-',
-			channel: row.channel ?? '-',
-			serviceCode: row.serviceCode ?? '-',
-			coach: row.coachName ?? row.coachId ?? '-',
+			employer: employerLabel(row),
+			programs: programLabels(row).join(', '),
+			channel: channelLabel(row),
+			serviceCode: serviceCodeLabel(row),
+			coach: row.coachName ? coachLabel(row) : (row.coachId ?? coachLabel(row)),
 			directionality: row.directionality
 		}));
 	}

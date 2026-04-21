@@ -17,13 +17,19 @@
 		type SdSchedulingDateBasis
 	} from '$lib/client/sd-scheduling-job';
 	import {
+		SD_BLANK_FILTER_LABELS,
+		SD_FILTER_DEFAULT_OPTIONS,
 		type ComparisonRangeMode,
 		exportRowsAsCsv,
 		isoDateDaysAgo,
+		matchesSelectedFilter,
+		matchesSelectedListFilter,
+		mergeFilterOptions,
+		normalizeFilterValue,
 		previousPeriodRange,
+		retainSelectedFilterValues,
 		todayIsoDate,
-		uniqueListValues,
-		uniqueSorted
+		valuesOrBlank
 	} from '$lib/client/sd-report-utils';
 	import type { TableColumn } from '$lib/components/report/engagementReportConfig';
 
@@ -98,8 +104,6 @@
 	const COMPARISON_DISABLED_BUTTON_CLASS =
 		'w-full border-blue-300 text-blue-900 hover:bg-blue-50';
 
-	const DEFAULT_STATUS_OPTIONS = ['scheduled', 'completed', 'no_show', 'rescheduled', 'canceled'];
-
 	let rangeStart = '';
 	let rangeEnd = '';
 	let selectedDateBasis: SdSchedulingDateBasis = 'session';
@@ -137,27 +141,40 @@
 	let coachOptions: string[] = [];
 	let statusOptions: string[] = [];
 
+	function programLabels(row: SchedulingRow): string[] {
+		return valuesOrBlank(row.programs).map((value) =>
+			normalizeFilterValue(value, { blankLabel: SD_BLANK_FILTER_LABELS.program })
+		);
+	}
+
+	function employerLabel(row: SchedulingRow): string {
+		return normalizeFilterValue(row.employer, { blankLabel: SD_BLANK_FILTER_LABELS.employer });
+	}
+
+	function coachLabel(row: SchedulingRow): string {
+		return normalizeFilterValue(row.coachName, { blankLabel: SD_BLANK_FILTER_LABELS.coach });
+	}
+
 	function includesPrograms(row: SchedulingRow): boolean {
-		if (selectedPrograms.length === 0) return true;
-		const rowPrograms = new Set((row.programs ?? []).map((value) => value.trim()));
-		return selectedPrograms.some((value) => rowPrograms.has(value));
+		return matchesSelectedListFilter(selectedPrograms, row.programs, {
+			blankLabel: SD_BLANK_FILTER_LABELS.program
+		});
 	}
 
 	function includesEmployers(row: SchedulingRow): boolean {
-		if (selectedEmployers.length === 0) return true;
-		if (!row.employer) return false;
-		return selectedEmployers.includes(row.employer);
+		return matchesSelectedFilter(selectedEmployers, row.employer, {
+			blankLabel: SD_BLANK_FILTER_LABELS.employer
+		});
 	}
 
 	function includesCoaches(row: SchedulingRow): boolean {
-		if (selectedCoaches.length === 0) return true;
-		if (!row.coachName) return false;
-		return selectedCoaches.includes(row.coachName);
+		return matchesSelectedFilter(selectedCoaches, row.coachName, {
+			blankLabel: SD_BLANK_FILTER_LABELS.coach
+		});
 	}
 
 	function includesStatuses(row: SchedulingRow): boolean {
-		if (selectedStatuses.length === 0) return true;
-		return selectedStatuses.includes(row.status);
+		return matchesSelectedFilter(selectedStatuses, row.status);
 	}
 
 	function filteredRows(): SchedulingRow[] {
@@ -171,18 +188,30 @@
 	}
 
 	function refreshFilterOptions() {
-		programOptions = uniqueListValues(loadedRows);
-		employerOptions = uniqueSorted(loadedRows.map((row) => row.employer));
-		coachOptions = uniqueSorted(loadedRows.map((row) => row.coachName));
-		statusOptions =
-			uniqueSorted(loadedRows.map((row) => row.status)).length > 0
-				? uniqueSorted(loadedRows.map((row) => row.status))
-				: DEFAULT_STATUS_OPTIONS;
+		programOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.programs,
+			loadedRows.flatMap((row) => valuesOrBlank(row.programs)),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.program }
+		);
+		employerOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.employers,
+			loadedRows.map((row) => row.employer),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.employer }
+		);
+		coachOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.coaches,
+			loadedRows.map((row) => row.coachName),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.coach }
+		);
+		statusOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.schedulingStatuses,
+			loadedRows.map((row) => row.status)
+		);
 
-		selectedPrograms = selectedPrograms.filter((value) => programOptions.includes(value));
-		selectedEmployers = selectedEmployers.filter((value) => employerOptions.includes(value));
-		selectedCoaches = selectedCoaches.filter((value) => coachOptions.includes(value));
-		selectedStatuses = selectedStatuses.filter((value) => statusOptions.includes(value));
+		selectedPrograms = retainSelectedFilterValues(selectedPrograms, programOptions);
+		selectedEmployers = retainSelectedFilterValues(selectedEmployers, employerOptions);
+		selectedCoaches = retainSelectedFilterValues(selectedCoaches, coachOptions);
+		selectedStatuses = retainSelectedFilterValues(selectedStatuses, statusOptions);
 	}
 
 	function resetFilters() {
@@ -338,9 +367,9 @@
 			sessionDate: row.startingDate ?? '-',
 			status: row.status,
 			member: row.memberName ?? row.memberEmail ?? row.memberId ?? '-',
-			employer: row.employer ?? '-',
-			programs: row.programs?.join(', ') || '-',
-			coach: row.coachName ?? row.coachEmail ?? row.coachId ?? '-'
+			employer: employerLabel(row),
+			programs: programLabels(row).join(', '),
+			coach: row.coachName ? coachLabel(row) : (row.coachEmail ?? row.coachId ?? coachLabel(row))
 		}));
 	}
 

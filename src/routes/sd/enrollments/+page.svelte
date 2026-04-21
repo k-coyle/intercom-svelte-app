@@ -17,13 +17,19 @@
 		runSdEnrollmentsJobUntilComplete
 	} from '$lib/client/sd-enrollments-job';
 	import {
+		SD_BLANK_FILTER_LABELS,
+		SD_FILTER_DEFAULT_OPTIONS,
 		type ComparisonRangeMode,
 		exportRowsAsCsv,
 		isoDateDaysAgo,
+		matchesSelectedFilter,
+		matchesSelectedListFilter,
+		mergeFilterOptions,
+		normalizeFilterValue,
 		previousPeriodRange,
+		retainSelectedFilterValues,
 		todayIsoDate,
-		uniqueListValues,
-		uniqueSorted
+		valuesOrBlank
 	} from '$lib/client/sd-report-utils';
 	import type { TableColumn } from '$lib/components/report/engagementReportConfig';
 
@@ -153,15 +159,25 @@
 	}
 
 	function includesSelectedPrograms(row: EnrollmentRow): boolean {
-		if (selectedPrograms.length === 0) return true;
-		const rowPrograms = new Set((row.programs ?? []).map((value) => value.trim()));
-		return selectedPrograms.some((value) => rowPrograms.has(value));
+		return matchesSelectedListFilter(selectedPrograms, row.programs, {
+			blankLabel: SD_BLANK_FILTER_LABELS.program
+		});
 	}
 
 	function includesSelectedEmployers(row: EnrollmentRow): boolean {
-		if (selectedEmployers.length === 0) return true;
-		if (!row.employer) return false;
-		return selectedEmployers.includes(row.employer);
+		return matchesSelectedFilter(selectedEmployers, row.employer, {
+			blankLabel: SD_BLANK_FILTER_LABELS.employer
+		});
+	}
+
+	function programLabels(row: EnrollmentRow): string[] {
+		return valuesOrBlank(row.programs).map((value) =>
+			normalizeFilterValue(value, { blankLabel: SD_BLANK_FILTER_LABELS.program })
+		);
+	}
+
+	function employerLabel(row: EnrollmentRow): string {
+		return normalizeFilterValue(row.employer, { blankLabel: SD_BLANK_FILTER_LABELS.employer });
 	}
 
 	function rowsAfterNonDateFilters(sourceRows: EnrollmentRow[]): EnrollmentRow[] {
@@ -197,12 +213,12 @@
 		const counts = new Map<string, number>();
 		for (const row of rows) {
 			if (dimension === 'program') {
-				const programs = row.programs?.length ? row.programs : ['Unspecified'];
+				const programs = programLabels(row);
 				for (const program of programs) {
 					counts.set(program, (counts.get(program) ?? 0) + 1);
 				}
 			} else {
-				const employer = row.employer?.trim() || 'Unspecified';
+				const employer = employerLabel(row);
 				counts.set(employer, (counts.get(employer) ?? 0) + 1);
 			}
 		}
@@ -313,10 +329,8 @@
 				}
 				const keys =
 					dimension === 'program'
-						? row.programs?.length
-						? row.programs
-						: ['Unspecified']
-					: [row.employer?.trim() || 'Unspecified'];
+						? programLabels(row)
+						: [employerLabel(row)];
 			for (const key of keys) {
 				totals.set(key, (totals.get(key) ?? 0) + 1);
 			}
@@ -340,10 +354,8 @@
 			}
 			const keys =
 				dimension === 'program'
-					? row.programs?.length
-						? row.programs
-						: ['Unspecified']
-					: [row.employer?.trim() || 'Unspecified'];
+					? programLabels(row)
+					: [employerLabel(row)];
 
 			if (mode === 'selected-range-cumulative' && row.enrollmentAt < startUnix) {
 				for (const key of keys) {
@@ -405,8 +417,8 @@
 		const rows = totalEnrollmentRows(loadedRows, endDate);
 		return rows.map((row) => ({
 			member: row.memberName ?? row.memberEmail ?? row.memberId,
-			employer: row.employer ?? '-',
-			programs: row.programs?.join(', ') || '-',
+			employer: employerLabel(row),
+			programs: programLabels(row).join(', '),
 			enrollmentDate: row.enrollmentDate ?? '-',
 			isNew: startUnix != null && row.enrollmentAt != null && row.enrollmentAt >= startUnix ? 'Yes' : 'No'
 		}));
@@ -422,10 +434,18 @@
 	}
 
 	function refreshFilterOptions() {
-		programOptions = uniqueListValues(loadedRows);
-		employerOptions = uniqueSorted(loadedRows.map((row) => row.employer));
-		selectedPrograms = selectedPrograms.filter((program) => programOptions.includes(program));
-		selectedEmployers = selectedEmployers.filter((employer) => employerOptions.includes(employer));
+		programOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.programs,
+			loadedRows.flatMap((row) => valuesOrBlank(row.programs)),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.program }
+		);
+		employerOptions = mergeFilterOptions(
+			SD_FILTER_DEFAULT_OPTIONS.employers,
+			loadedRows.map((row) => row.employer),
+			{ blankLabel: SD_BLANK_FILTER_LABELS.employer }
+		);
+		selectedPrograms = retainSelectedFilterValues(selectedPrograms, programOptions);
+		selectedEmployers = retainSelectedFilterValues(selectedEmployers, employerOptions);
 	}
 
 		function resetFilters() {
