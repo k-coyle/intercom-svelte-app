@@ -9,6 +9,7 @@ import {
   INTERCOM_ATTR_DOB,
   INTERCOM_ATTR_ELIGIBLE_PROGRAMS,
   INTERCOM_ATTR_EMPLOYER,
+  INTERCOM_ATTR_EMPLOYER_ID,
   INTERCOM_ATTR_ENROLLED_DATE,
   INTERCOM_ATTR_ENGAGEMENT_STATUS,
   INTERCOM_ATTR_ENGAGEMENT_STATUS_DATE,
@@ -16,13 +17,12 @@ import {
   INTERCOM_ATTR_NAME,
   INTERCOM_ATTR_REFERRAL,
   INTERCOM_ATTR_REGISTRATION_CODE,
-  INTERCOM_ATTR_USER_ID
 } from '$lib/server/intercom-attrs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 // Custom attribute keys in Intercom
-const ATTR_USER_ID = INTERCOM_ATTR_USER_ID;
+const ATTR_EMPLOYER_ID = INTERCOM_ATTR_EMPLOYER_ID;
 const ATTR_NAME = INTERCOM_ATTR_NAME;
 const ATTR_DOB = INTERCOM_ATTR_DOB;
 const ATTR_EMPLOYER = INTERCOM_ATTR_EMPLOYER;
@@ -273,7 +273,7 @@ function buildCsv(contacts: IntercomContact[]): { csv: string; rows: any[] } {
 
     // Employee ID
     const employeeId =
-      attrs[ATTR_USER_ID] ?? (contact as any)['external_id'] ?? contact.id ?? '';
+      attrs[ATTR_EMPLOYER_ID] ?? (contact as any)['external_id'] ?? contact.id ?? '';
 
     // Name → split into first / last
     const rawNameAttr = attrs[ATTR_NAME] ?? contact.name ?? '';

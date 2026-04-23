@@ -1,4 +1,5 @@
 export const INTERCOM_ATTR_USER_ID = 'User ID';
+export const INTERCOM_ATTR_EMPLOYER_ID = 'Employer ID';
 export const INTERCOM_ATTR_NAME = 'Name';
 export const INTERCOM_ATTR_DOB = 'Date of birth';
 export const INTERCOM_ATTR_EMPLOYER = 'Employer';
