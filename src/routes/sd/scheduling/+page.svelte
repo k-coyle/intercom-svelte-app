@@ -576,6 +576,8 @@
 	let comparisonScheduledCount = 0;
 	let completedCount = 0;
 	let comparisonCompletedCount = 0;
+	let canceledCount = 0;
+	let comparisonCanceledCount = 0;
 	let missedCount = 0;
 	let comparisonMissedCount = 0;
 	let table: Array<Record<string, string>> = [];
@@ -628,6 +630,8 @@
 		comparisonScheduledCount = comparisonRows.filter((row) => row.status === 'scheduled').length;
 		completedCount = rows.filter((row) => row.status === 'completed').length;
 		comparisonCompletedCount = comparisonRows.filter((row) => row.status === 'completed').length;
+		canceledCount = rows.filter((row) => row.status === 'canceled').length;
+		comparisonCanceledCount = comparisonRows.filter((row) => row.status === 'canceled').length;
 		missedCount = rows.filter((row) => row.status === 'rescheduled' || row.status === 'no_show').length;
 		comparisonMissedCount = comparisonRows.filter(
 			(row) => row.status === 'rescheduled' || row.status === 'no_show'
@@ -812,7 +816,7 @@
 		</Card.Content>
 	</Card.Root>
 
-	<div class="grid gap-4 md:grid-cols-4">
+	<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
 		<KpiCard
 			title="Total Sessions"
 			value={rows.length}
@@ -833,6 +837,13 @@
 			comparisonEnabled={comparisonDisplayEnabled}
 			comparisonValue={comparisonDisplayEnabled ? comparisonCompletedCount : null}
 			comparisonTrend="higher_is_better"
+		/>
+		<KpiCard
+			title="Canceled Sessions"
+			value={canceledCount}
+			comparisonEnabled={comparisonDisplayEnabled}
+			comparisonValue={comparisonDisplayEnabled ? comparisonCanceledCount : null}
+			comparisonTrend="lower_is_better"
 		/>
 		<KpiCard
 			title="Missed Sessions (Rescheduled + No-Show)"
